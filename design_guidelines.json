@@ -1,0 +1,163 @@
+{
+  "app_name": "Marina Pararanga",
+  "personality": "1 iOS-Native Clean",
+  "personality_one_liner": "A premium, functional, and nautical-themed scheduling utility blending crisp iOS usability with deep marine blues and gold accents.",
+  "color": {
+    "surface": "#FFFFFF",
+    "onSurface": "#111827",
+    "surfaceSecondary": "#F5F7FA",
+    "onSurfaceSecondary": "#374151",
+    "surfaceTertiary": "#E5E9F0",
+    "onSurfaceTertiary": "#4B5563",
+    "surfaceInverse": "#0B2545",
+    "onSurfaceInverse": "#FFFFFF",
+    "brand": "#0B2545",
+    "brandPrimary": "#0B2545",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#C5A059",
+    "onBrandSecondary": "#FFFFFF",
+    "brandTertiary": "#F2ECD9",
+    "onBrandTertiary": "#7A5C13",
+    "success": "#166534",
+    "onSuccess": "#FFFFFF",
+    "warning": "#854D0E",
+    "onWarning": "#FFFFFF",
+    "error": "#991B1B",
+    "onError": "#FFFFFF",
+    "info": "#1E3A8A",
+    "onInfo": "#FFFFFF",
+    "border": "#E5E7EB",
+    "borderStrong": "#D1D5DB",
+    "divider": "#F3F4F6"
+  },
+  "typography": {
+    "displayFontFamily": "Plus Jakarta Sans",
+    "textFontFamily": "Plus Jakarta Sans",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Maintain generous vertical breathing room. Forms should feel spacious, not cramped. Use md (12pt) and lg (16pt) for component padding, and xl (24pt) for section margins.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": 1,
+  "navigation": "stack_only",
+  "icon_set": "Ionicons",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Use on sticky headers over scrolling forms",
+      "Use on the floating/sticky primary CTA at the bottom of forms",
+      "Use as overlay on hero images"
+    ],
+    "dont's": [
+      "Do not use on regular input fields or list rows",
+      "Do not use on dense data lists"
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Login",
+      "purpose": "Secure entry via CPF validation for registered boat owners.",
+      "states": {
+        "loading": "Centered spinner during CPF check.",
+        "empty": "N/A",
+        "error": "Modal or inline red text: 'CPF não cadastrado' + Retry button."
+      },
+      "layout": "Full-bleed hero image of a marina at the top with a vertical gradient scrim fading to solid surface at the bottom. The bottom half contains a clean, large typography CPF input field and a sticky 'Entrar' (brandPrimary) button at the bottom."
+    },
+    {
+      "name": "Home",
+      "purpose": "Main hub offering the 4 core actions (Request/Alter Launch & Return).",
+      "states": {
+        "loading": "Spinner while fetching user data.",
+        "empty": "N/A",
+        "error": "Failed to load user info."
+      },
+      "layout": "Header showing user's Name and Boat Name. A 2x2 grid or stacked list of 4 large, touch-friendly cards. Cards use surfaceSecondary with subtle shadow tier 1. 'Solicitar' cards can have a brandPrimary icon, while 'Alterar' cards can have a brandSecondary (Gold) icon to differentiate."
+    },
+    {
+      "name": "SolicitarDescida",
+      "purpose": "Form to schedule a boat launch (descida) with required details.",
+      "states": {
+        "loading": "Submitting state on the button.",
+        "empty": "N/A",
+        "error": "Validation errors inline (e.g., time outside 08:30-17:00)."
+      },
+      "layout": "Scrollable form with clean labels above inputs. Use platform-native time pickers restricted to 08:30-17:00. Fields: Day/Time, Expected Return, Destination, Passengers, Responsible, Observation. A sticky brandPrimary CTA at the bottom inside a glass container."
+    },
+    {
+      "name": "SolicitarSubida",
+      "purpose": "Form to schedule a boat return (subida).",
+      "states": {
+        "loading": "Submitting state on the button.",
+        "empty": "N/A",
+        "error": "Validation errors inline (e.g., time outside 08:30-17:30)."
+      },
+      "layout": "Similar to Descida form, but only containing Day/Time (interval 08:30-17:30). Sticky primary CTA at the bottom."
+    },
+    {
+      "name": "AlterarSolicitacoes",
+      "purpose": "List today's requests (Descida or Subida) to select and edit.",
+      "states": {
+        "loading": "Skeleton loader for list rows.",
+        "empty": "Nautical illustration (steering wheel/compass) + 'Nenhuma solicitação para hoje'.",
+        "error": "Error fetching today's requests + Retry button."
+      },
+      "layout": "List view. Each row shows Time, Type, and Status. Tapping a row navigates to the respective form (Descida or Subida) pre-filled with data for editing."
+    }
+  ],
+  "images": {
+    "login_hero": {
+      "url": "https://images.pexels.com/photos/7995000/pexels-photo-7995000.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Aerial view of yachts docked at a marina"
+    },
+    "empty_state_illustration": {
+      "url": "https://images.pexels.com/photos/7384103/pexels-photo-7384103.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Nautical compass and helm"
+    }
+  },
+  "haptics": {
+    "button_press": "impactLight",
+    "form_submit": "notificationSuccess",
+    "error": "notificationError",
+    "time_picker_scroll": "selection"
+  },
+  "instructions_to_main_agent": [
+    "Strictly follow the color palette: Deep Marine Blue (#0B2545) and Gold (#C5A059) as requested in the user brief. Do not use generic AI purples or indigos.",
+    "Implement the 'Solicitar Descida' form with the exact fields requested: Date/Time (08:30-17:00), Return Date/Time, Destination, Passengers, Responsible, and Observations.",
+    "Ensure time pickers strictly enforce the business rules: Descida (08:30-17:00) and Subida (08:30-17:30). Provide clear inline validation.",
+    "For the Login screen, use the `login_hero` image with a top-to-bottom vertical gradient scrim so the CPF input area at the bottom has a clean, readable background.",
+    "Use a sticky bottom CTA in a glass container for all forms so the user can easily submit without scrolling to the very bottom.",
+    "Avoid unnecessary bottom tabs. The app is a simple utility; a stack navigation originating from the Home hub is sufficient and more focused."
+  ]
+}
