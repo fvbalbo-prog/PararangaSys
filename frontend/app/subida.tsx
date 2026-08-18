@@ -19,7 +19,7 @@ import { colors, spacing, radius, typography } from '@/src/theme';
 import { DateField, DateHelpers } from '@/src/components/DateField';
 import { SelectField } from '@/src/components/SelectField';
 import { TimeSlotField } from '@/src/components/TimeSlotField';
-import { api } from '@/src/api';
+import { api, boatName } from '@/src/api';
 import type { User } from '@/src/api';
 import { tideHeightAt, type TidePoint } from '@/src/tide';
 
@@ -62,7 +62,7 @@ export default function SubidaScreen() {
       if (!raw) return router.replace('/');
       const u: User = JSON.parse(raw);
       setUser(u);
-      const boatList = u.boats && u.boats.length ? u.boats : [u.boat_name];
+      const boatList = u.boats && u.boats.length ? u.boats.map(boatName) : [u.boat_name];
       if (!editId && boatList.length) setBoat(boatList[0]);
 
       if (editId) {
@@ -82,7 +82,7 @@ export default function SubidaScreen() {
     })();
   }, [editId, router]);
 
-  const boatOptions = user?.boats && user.boats.length ? user.boats : user ? [user.boat_name] : [];
+  const boatOptions = user?.boats && user.boats.length ? user.boats.map(boatName) : user ? [user.boat_name] : [];
 
   const handleSubmit = async () => {
     setError(null);

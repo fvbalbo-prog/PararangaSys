@@ -1,0 +1,35 @@
+{
+  "summary": "Iteration 6 fully verified. Backend: 14/14 pytest pass on /app/backend/tests/test_marina_iteration6.py — GET /api/users returns boats as objects [{name,draft,length}] with admin filtered out; POST /api/users/{cpf}/boats adds a boat and 409s on duplicate; DELETE removes it; POST /api/users creates a client, 400 on invalid CPF, 409 on duplicate; PATCH /api/requests/{id}/complete sets status=concluida with returned_at; 404 on missing id. Regression preserved: login (client+admin), tides endpoint, boat_name saved from selection, half-hour + 3/slot capacity + suggestion still enforced. Frontend (Playwright 375x812): brand-logo renders on login and old Pexels image is gone (DOM check). Admin panel shows 'Concluir' (admin-complete-{id}) and 'Cancelar' (admin-cancel-{id}) on each Aguardando row; tapping Concluir removes the action buttons and marks the row Concluída (verified end-to-end). admin-clientes-button navigates to Cadastro de Lanchas which lists every seeded client with the exact 'Calado: X m • Comprimento: Y pés' spec line for each boat. Add-boat modal (boat-name/draft/length inputs) saves and immediately shows the new boat card; trash icon removes the boat; new-client-button opens the client creation modal with cpf/name/phone inputs. Delay alert verified via Date-mock (fake now=12:00) for a real 08:30 subida on today: late-alert-banner renders ('1 lancha atrasada'), Atrasada badge shown next to StatusBadge in the movimentação row (red 1.5px border), and tapping the banner switches to Quadro where the row is highlighted red with a red 'Atrasada' label and red subida time. All 14 backend tests + 6 frontend flows pass. No new bugs found in this iteration.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_marina_iteration6.py",
+    "/app/test_reports/pytest/iteration6_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py:483-486 _boat_name helper cleanly supports legacy string boats and new dict boats — list_users, add_boat and remove_boat all normalize on read/write, so migration is safe.",
+    "server.py:519-536 add_boat correctly detects duplicates by normalized name and auto-sets boat_name when the client had none (keeps request creation working for clients that had 0 boats).",
+    "server.py:539-551 remove_boat re-points user.boat_name to the first remaining boat (or empty) when the deleted boat was the default — nice edge case handling.",
+    "server.py:370-381 complete_request writes returned_at + status=concluida atomically; identical to confirm_return but semantically separate for admin use — acceptable duplication (both remain because clients and admin have different auth surfaces).",
+    "admin.tsx:86-105 doComplete/doCancel are optimistic (update local state then call API) with a load() rollback on error — good responsiveness.",
+    "admin.tsx:114-118 isLate uses `nowMin > ref + 15` with isToday guard so past days and future days never light up — correct.",
+    "admin.tsx:126-142 quadroRows picks the subida.time as reference when a subida exists, else falls back to descida.expected_return_time — matches the requirement 'subida 15+ min past'.",
+    "admin-clientes.tsx:70-99 submitBoat parses comma-decimal drafts (0,8 -> 0.8) which matches the pt-BR conventions used elsewhere in the app.",
+    "admin-clientes.tsx:113-131 submitClient validates 11-digit CPF and non-empty name/phone locally before hitting the API — matches backend validation, so users get instant feedback.",
+    "MINOR: admin-clientes.tsx modal fits on 812-tall viewport with keyboard closed; on 667-tall (iPhone SE) the save button falls just under the viewport with all 3 fields shown and requires scroll-in-view (not a bug — Playwright scrolls into view fine — but users on very small devices may need to scroll before hitting Salvar)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_marina_iteration6.py (new)"
+  ],
+  "success_rate": {"backend": "100% (14/14)", "frontend": "100% (login logo, admin Concluir/Cancelar, admin-clientes list+add+remove, new-client modal, late-alert-banner + Atrasada badge in list + Quadro)"},
+  "seed_data_creation": "Backend tests create/cleanup a synthetic client (cpf starts with 99...) and TEST_ prefixed requests. Frontend tests created two temp requests on today (an 08:30 subida for late-alert and a 17:00 descida for Concluir); both were cleaned up via DELETE /api/requests/{id} at the end.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Late-alert-banner cannot be triggered by wall-clock alone during automated tests because the container clock and the Playwright browser clock are aligned to UTC — a subida at 08:30 today only becomes 'late' after 08:45 UTC. To verify the alert deterministically, inject an init script that overrides globalThis.Date to a fixed 12:00 local time BEFORE navigating (see iteration_6 script). The pytest run needs `-o addopts=` to bypass the project's pytest-xdist -n default, because xdist LoadScope may flake tests that share module-scope state (created client). testID conventions in the admin-clientes screen: `client-card-{cpf}`, `boat-{cpf}-{name}`, `add-boat-{cpf}`, `remove-boat-{cpf}-{name}`, `save-boat-button`, `new-client-button`, `client-cpf-input`, `client-name-input`, `client-phone-input`, `save-client-button`."
+}

@@ -10,7 +10,6 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Image } from 'expo-image';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
@@ -18,12 +17,7 @@ import { colors, spacing, radius, typography } from '@/src/theme';
 import { api } from '@/src/api';
 
 function formatCpf(value: string) {
-  const digits = value.replace(/\D/g, '').slice(0, 11);
-  let out = digits;
-  if (digits.length > 9) out = `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
-  else if (digits.length > 6) out = `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
-  else if (digits.length > 3) out = `${digits.slice(0, 3)}.${digits.slice(3)}`;
-  return out;
+  return value.replace(/\D/g, '').slice(0, 5);
 }
 
 export default function LoginScreen() {
@@ -35,8 +29,8 @@ export default function LoginScreen() {
   const handleLogin = async () => {
     setError(null);
     const digits = cpf.replace(/\D/g, '');
-    if (digits.length !== 11) {
-      setError('Digite os 11 dígitos do CPF.');
+    if (digits.length !== 5) {
+      setError('Digite os 5 primeiros números do CPF.');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       return;
     }
@@ -63,40 +57,27 @@ export default function LoginScreen() {
       <View style={{ flex: 1 }}>
           <View style={styles.hero}>
             <Image
-              source={{ uri: 'https://images.pexels.com/photos/7995000/pexels-photo-7995000.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940' }}
-              style={StyleSheet.absoluteFillObject}
-              contentFit="cover"
+              source={require('../assets/images/logo-trans.png')}
+              style={styles.logoOverlay}
+              contentFit="contain"
+              tintColor="#FFFFFF"
+              testID="brand-logo"
             />
-            <LinearGradient
-              colors={["rgba(11,37,69,0.15)", "rgba(11,37,69,0.55)", colors.surface]}
-              style={StyleSheet.absoluteFillObject}
-              locations={[0, 0.55, 1]}
-            />
-            <View style={styles.heroContent}>
-              <Text style={styles.heroKicker}>MARINA</Text>
-              <Text style={styles.heroTitle}>Pararanga</Text>
-              <Text style={styles.heroSubtitle}>Solicitações de descida e subida</Text>
-            </View>
+            <Text style={styles.heroTagline}>Solicitações de descida e subida</Text>
           </View>
 
           <View style={styles.form}>
-            <Image
-              source={require('../assets/images/logo.png')}
-              style={styles.logo}
-              contentFit="contain"
-              testID="brand-logo"
-            />
             <Text style={styles.label}>CPF</Text>
             <TextInput
               testID="cpf-input"
               style={styles.input}
               value={cpf}
               onChangeText={(v) => setCpf(formatCpf(v))}
-              placeholder="000.000.000-00"
+              placeholder="00000"
               placeholderTextColor={colors.onSurfaceTertiary}
               keyboardType="number-pad"
               inputMode="numeric"
-              maxLength={14}
+              maxLength={5}
               autoFocus
             />
             {error ? (
@@ -104,7 +85,7 @@ export default function LoginScreen() {
                 {error}
               </Text>
             ) : (
-              <Text style={styles.hint}>Digite o CPF cadastrado para continuar</Text>
+              <Text style={styles.hint}>Digite os 5 primeiros números do seu CPF</Text>
             )}
 
             <Pressable
@@ -127,7 +108,27 @@ export default function LoginScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.surface },
-  hero: { height: '40%', justifyContent: 'flex-end', backgroundColor: colors.brandPrimary },
+  hero: { height: '46%', justifyContent: 'center', alignItems: 'center', backgroundColor: colors.brandPrimary },
+  logoBadge: {
+    alignSelf: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing.xxl,
+    paddingVertical: spacing.xl,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  logoOverlay: { width: 300, height: 150 },
+  heroTagline: {
+    color: colors.onBrandPrimary,
+    opacity: 0.85,
+    fontSize: typography.base,
+    marginTop: spacing.xl,
+    letterSpacing: 0.3,
+  },
   heroContent: { padding: spacing.xl, paddingBottom: spacing.lg },
   heroKicker: {
     color: colors.brandSecondary,

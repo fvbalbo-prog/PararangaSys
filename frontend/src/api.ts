@@ -1,11 +1,17 @@
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
 
+export type Boat = { name: string; draft?: number | null; length?: number | null };
+
+export function boatName(b: Boat | string): string {
+  return typeof b === 'string' ? b : b.name;
+}
+
 export type User = {
   cpf: string;
   name: string;
   phone: string;
   boat_name: string;
-  boats?: string[];
+  boats?: (Boat | string)[];
   is_admin?: boolean;
 };
 
@@ -81,10 +87,10 @@ export const api = {
   setTides: (date: string, points: { time: string; height: number }[]) =>
     req<TideDay>(`/tides/${date}`, { method: 'PUT', body: JSON.stringify({ points }) }),
   listUsers: () => req<Client[]>('/users'),
-  createClient: (data: { cpf: string; name: string; phone: string; boats: string[] }) =>
+  createClient: (data: { cpf: string; name: string; phone: string; boats: Boat[] }) =>
     req<Client>('/users', { method: 'POST', body: JSON.stringify(data) }),
-  addBoat: (cpf: string, boat: string) =>
-    req<Client>(`/users/${cpf}/boats`, { method: 'POST', body: JSON.stringify({ boat }) }),
+  addBoat: (cpf: string, boat: { name: string; draft?: number | null; length?: number | null }) =>
+    req<Client>(`/users/${cpf}/boats`, { method: 'POST', body: JSON.stringify(boat) }),
   removeBoat: (cpf: string, boat: string) =>
     req<Client>(`/users/${cpf}/boats?boat=${encodeURIComponent(boat)}`, { method: 'DELETE' }),
 };
@@ -103,6 +109,6 @@ export type Client = {
   cpf: string;
   name: string;
   phone: string;
-  boats: string[];
+  boats: Boat[];
   boat_name?: string;
 };

@@ -46,13 +46,15 @@ Aplicativo mobile (React Native/Expo) para os proprietários de lanchas da Marin
 - **Slots de meia em meia hora** com limite de **3 lanchas por horário** (exceto subida 17:30, ilimitado); se lotado, o backend indica o próximo horário disponível. Seletor de horário mostra disponibilidade por slot.
 - **Maré automática (TábuaMaré API)**: `GET /api/tides/{date}` busca a tábua de São Sebastião-SP (porto `sp01`) com cache em Mongo (`tide_cache`); chave em `TABUAMARE_API_KEY` (funciona anônimo com limite menor). Os formulários de descida/subida mostram a altura da maré no horário escolhido, com cores (<0,5m vermelho, 0,5–0,8m amarelo, >0,8m verde) e salvam `tide_height` no registro.
 
+## Features adicionadas (2026-08-18 - iteração 6)
+- **Imagem de login** trocada para a foto oficial da Pararanga Náutica (removida a foto antiga do Pexels).
+- **Botão Concluir/Cancelar no Painel admin**: cada linha "Aguardando" da Movimentação tem ações "Concluir" (PATCH /requests/{id}/complete → status concluída) e "Cancelar".
+- **Alertas de Atraso**: banner no topo + destaque vermelho no Quadro e na Movimentação para subidas cujo horário passou +15 min sem status concluída (apenas no dia atual).
+- **Cadastro de Lanchas** (`/admin-clientes`): admin lista clientes, adiciona/remove lanchas com **calado (m)** e **comprimento (pés)**, e cadastra novos clientes. Modelo `boats` migrado de string para objeto `{name, draft, length}` (com compatibilidade retroativa).
+
 ## Backlog (solicitado, ainda pendente)
-- Alertas de atraso no quadro (lanchas que passaram do horário e não voltaram)
 - Busca por lancha no quadro
-- Tela de cadastro/gestão de lanchas por cliente (backend pronto: /api/users, /users/{cpf}/boats)
 - Exportar quadro do dia em PDF
-- Botão "Concluir" no painel admin (backend pronto: PATCH /requests/{id}/complete)
-- Coluna de maré no quadro de horários
 
 ## CPF administrador
 - `00000000000` — Administração Marina (redireciona para o Painel).

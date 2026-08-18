@@ -52,12 +52,18 @@ SUBIDA_MAX = time(17, 30)
 
 
 # ===================== Models =====================
+class Boat(BaseModel):
+    name: str
+    draft: Optional[float] = None   # calado em metros
+    length: Optional[float] = None  # comprimento em pés
+
+
 class User(BaseModel):
     cpf: str
     name: str
     phone: str
     boat_name: str
-    boats: List[str] = []
+    boats: List[Boat] = []
     is_admin: bool = False
 
 
@@ -217,10 +223,13 @@ async def root():
 
 @api_router.post("/login")
 async def login(payload: LoginInput):
-    cpf = normalize_cpf(payload.cpf)
-    if len(cpf) != 11:
-        raise HTTPException(status_code=400, detail="CPF inválido. Digite os 11 dígitos.")
-    user = await db.users.find_one({"cpf": cpf}, {"_id": 0})
+    digits = normalize_cpf(payload.cpf)
+    if len(digits) < 5:
+        raise HTTPException(status_code=400, detail="Digite os 5 primeiros números do CPF.")
+    prefix = digits[:5]
+    # Match by the first 5 digits of the CPF (or full CPF if 11 digits given)
+    query = {"cpf": digits} if len(digits) == 11 else {"cpf": {"$regex": f"^{prefix}"}}
+    user = await db.users.find_one(query, {"_id": 0})
     if not user:
         raise HTTPException(status_code=404, detail="CPF não cadastrado.")
     return user
@@ -465,16 +474,26 @@ class ClientInput(BaseModel):
     cpf: str
     name: str
     phone: str
-    boats: List[str] = []
+    boats: List[Boat] = []
 
 
 class BoatInput(BaseModel):
-    boat: str
+    name: str
+    draft: Optional[float] = None
+    length: Optional[float] = None
+
+
+def _boat_name(b) -> str:
+    """Support both legacy string boats and new object boats."""
+    return b if isinstance(b, str) else (b.get("name") if isinstance(b, dict) else "")
 
 
 @api_router.get("/users", response_model=List[User])
 async def list_users():
     docs = await db.users.find({"is_admin": {"$ne": True}}, {"_id": 0}).sort("name", 1).to_list(1000)
+    # normalize legacy string boats -> objects
+    for d in docs:
+        d["boats"] = [b if isinstance(b, dict) else {"name": b} for b in d.get("boats", [])]
     return docs
 
 
@@ -486,12 +505,12 @@ async def create_client(payload: ClientInput):
     existing = await db.users.find_one({"cpf": cpf})
     if existing:
         raise HTTPException(status_code=409, detail="CPF já cadastrado.")
-    boats = [b.strip() for b in payload.boats if b.strip()]
+    boats = [b.dict() for b in payload.boats if b.name.strip()]
     doc = {
         "cpf": cpf,
         "name": payload.name.strip(),
         "phone": payload.phone.strip(),
-        "boat_name": boats[0] if boats else "",
+        "boat_name": boats[0]["name"] if boats else "",
         "boats": boats,
         "is_admin": False,
     }
@@ -506,16 +525,16 @@ async def add_boat(cpf: str, payload: BoatInput):
     user = await db.users.find_one({"cpf": cpf_clean}, {"_id": 0})
     if not user:
         raise HTTPException(status_code=404, detail="Cliente não encontrado.")
-    boat = payload.boat.strip()
-    if not boat:
+    name = payload.name.strip()
+    if not name:
         raise HTTPException(status_code=400, detail="Nome da lancha é obrigatório.")
-    boats = user.get("boats", [])
-    if boat in boats:
+    boats = [b if isinstance(b, dict) else {"name": b} for b in user.get("boats", [])]
+    if any(_boat_name(b) == name for b in boats):
         raise HTTPException(status_code=409, detail="Lancha já cadastrada.")
-    boats.append(boat)
+    boats.append({"name": name, "draft": payload.draft, "length": payload.length})
     update = {"boats": boats}
     if not user.get("boat_name"):
-        update["boat_name"] = boat
+        update["boat_name"] = name
     await db.users.update_one({"cpf": cpf_clean}, {"$set": update})
     return await db.users.find_one({"cpf": cpf_clean}, {"_id": 0})
 
@@ -526,20 +545,25 @@ async def remove_boat(cpf: str, boat: str):
     user = await db.users.find_one({"cpf": cpf_clean}, {"_id": 0})
     if not user:
         raise HTTPException(status_code=404, detail="Cliente não encontrado.")
-    boats = [b for b in user.get("boats", []) if b != boat]
+    boats = [b if isinstance(b, dict) else {"name": b} for b in user.get("boats", [])]
+    boats = [b for b in boats if _boat_name(b) != boat]
     update = {"boats": boats}
     if user.get("boat_name") == boat:
-        update["boat_name"] = boats[0] if boats else ""
+        update["boat_name"] = _boat_name(boats[0]) if boats else ""
     await db.users.update_one({"cpf": cpf_clean}, {"$set": update})
     return await db.users.find_one({"cpf": cpf_clean}, {"_id": 0})
 
 
 # ===================== Seed =====================
 SEED_USERS = [
-    {"cpf": "11111111111", "name": "João Silva", "phone": "(48) 99999-1111", "boat_name": "Netuno", "boats": ["Netuno"], "is_admin": False},
-    {"cpf": "22222222222", "name": "Maria Santos", "phone": "(48) 99999-2222", "boat_name": "Poseidon", "boats": ["Poseidon", "Sereia", "Vento Sul"], "is_admin": False},
-    {"cpf": "33333333333", "name": "Carlos Oliveira", "phone": "(48) 99999-3333", "boat_name": "Aurora", "boats": ["Aurora", "Estrela do Mar"], "is_admin": False},
-    {"cpf": "00000000000", "name": "Administração Marina", "phone": "(48) 3000-0000", "boat_name": "Marina Pararanga", "boats": [], "is_admin": True},
+    {"cpf": "11111111111", "name": "João Silva", "phone": "(48) 99999-1111", "boat_name": "Netuno",
+     "boats": [{"name": "Netuno", "draft": 0.8, "length": 22}], "is_admin": False},
+    {"cpf": "22222222222", "name": "Maria Santos", "phone": "(48) 99999-2222", "boat_name": "Poseidon",
+     "boats": [{"name": "Poseidon", "draft": 1.1, "length": 32}, {"name": "Sereia", "draft": 0.9, "length": 26}, {"name": "Vento Sul", "draft": 1.0, "length": 28}], "is_admin": False},
+    {"cpf": "33333333333", "name": "Carlos Oliveira", "phone": "(48) 99999-3333", "boat_name": "Aurora",
+     "boats": [{"name": "Aurora", "draft": 1.2, "length": 34}, {"name": "Estrela do Mar", "draft": 0.7, "length": 24}], "is_admin": False},
+    {"cpf": "00000000000", "name": "Administração Marina", "phone": "(48) 3000-0000", "boat_name": "Marina Pararanga",
+     "boats": [], "is_admin": True},
 ]
 
 

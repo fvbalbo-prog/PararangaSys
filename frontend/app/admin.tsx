@@ -83,6 +83,40 @@ export default function AdminScreen() {
     router.replace('/');
   };
 
+  const doComplete = async (id: string) => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    const now = new Date().toISOString();
+    setItems((prev) => prev.map((r) => (r.id === id ? { ...r, status: 'concluida', returned_at: now } : r)));
+    try {
+      await api.completeRequest(id);
+    } catch {
+      load();
+    }
+  };
+
+  const doCancel = async (id: string) => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    setItems((prev) => prev.map((r) => (r.id === id ? { ...r, status: 'cancelada' } : r)));
+    try {
+      await api.cancelRequest(id);
+    } catch {
+      load();
+    }
+  };
+
+  const isToday = toISO(day) === toISO(new Date());
+  const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+  const toMin = (hhmm?: string | null) => {
+    if (!hhmm) return null;
+    const [h, m] = hhmm.split(':').map(Number);
+    return h * 60 + m;
+  };
+  // Late if today, 15+ min past the reference time and not concluded
+  const isLate = (refTime?: string | null, concluded?: boolean) => {
+    const ref = toMin(refTime);
+    return isToday && !concluded && ref != null && nowMin > ref + 15;
+  };
+
   const filtered = items.filter((i) => (filter === 'todas' ? true : i.type === filter));
   const descidas = items.filter((i) => i.type === 'descida' && i.status !== 'cancelada').length;
   const subidas = items.filter((i) => i.type === 'subida' && i.status !== 'cancelada').length;
@@ -95,14 +129,19 @@ export default function AdminScreen() {
     .sort((a, b) => a.time.localeCompare(b.time))
     .map((d) => {
       const sub = activeSubidas.find((s) => s.boat_name === d.boat_name);
+      const refTime = sub ? sub.time : d.expected_return_time;
+      const concluded = sub ? sub.status === 'concluida' : d.status === 'concluida';
       return {
         id: d.id,
         boat: d.boat_name || '—',
         descida: d.time,
         subida: sub ? sub.time : d.expected_return_time ? `${d.expected_return_time}*` : '—',
-        concluida: d.status === 'concluida',
+        concluida: concluded,
+        late: isLate(refTime, concluded),
       };
     });
+
+  const lateCount = quadroRows.filter((r) => r.late).length;
 
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
@@ -111,10 +150,31 @@ export default function AdminScreen() {
           <Text style={styles.kicker}>PAINEL DA MARINA</Text>
           <Text style={styles.title} testID="admin-title">Movimentação do dia</Text>
         </View>
-        <Pressable onPress={handleLogout} hitSlop={12} testID="admin-logout" style={styles.logoutBtn}>
+        <Pressable
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-clientes'); }}
+          hitSlop={12}
+          testID="admin-clientes-button"
+          style={styles.logoutBtn}
+        >
+          <Ionicons name="people-outline" size={22} color={colors.onBrandPrimary} />
+        </Pressable>
+        <Pressable onPress={handleLogout} hitSlop={12} testID="admin-logout" style={[styles.logoutBtn, { marginLeft: spacing.sm }]}>
           <Ionicons name="log-out-outline" size={22} color={colors.onBrandPrimary} />
         </Pressable>
       </View>
+
+      {isToday && lateCount > 0 ? (
+        <Pressable
+          testID="late-alert-banner"
+          onPress={() => setMode('quadro')}
+          style={styles.alertBanner}
+        >
+          <Ionicons name="warning" size={18} color="#FFFFFF" />
+          <Text style={styles.alertText}>
+            {lateCount} {lateCount === 1 ? 'lancha atrasada' : 'lanchas atrasadas'} — ainda não retornou
+          </Text>
+        </Pressable>
+      ) : null}
 
       <View style={styles.dateNav}>
         <Pressable onPress={() => shiftDay(-1)} testID="prev-day" style={styles.navBtn} hitSlop={8}>
@@ -194,13 +254,32 @@ export default function AdminScreen() {
                 />
               }
               renderItem={({ item, index }) => (
-                <View style={[styles.quadroRow, index % 2 === 1 && { backgroundColor: colors.surfaceSecondary }]} testID={`quadro-row-${item.id}`}>
+                <View
+                  style={[
+                    styles.quadroRow,
+                    index % 2 === 1 && { backgroundColor: colors.surfaceSecondary },
+                    item.late && styles.quadroRowLate,
+                  ]}
+                  testID={`quadro-row-${item.id}`}
+                >
                   <View style={{ flex: 2, flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
-                    <Ionicons name="boat" size={16} color={colors.brandPrimary} />
-                    <Text style={styles.quadroBoat} numberOfLines={1}>{item.boat}</Text>
+                    <Ionicons name={item.late ? 'warning' : 'boat'} size={16} color={item.late ? colors.error : colors.brandPrimary} />
+                    <View style={{ flexShrink: 1 }}>
+                      <Text style={styles.quadroBoat} numberOfLines={1}>{item.boat}</Text>
+                      {item.late ? <Text style={styles.quadroLateText} testID={`quadro-late-${item.id}`}>Atrasada</Text> : null}
+                    </View>
                   </View>
                   <Text style={[styles.quadroTime, styles.quadroCol]}>{item.descida}</Text>
-                  <Text style={[styles.quadroTime, styles.quadroCol, item.concluida && { color: colors.success }]}>{item.subida}</Text>
+                  <Text
+                    style={[
+                      styles.quadroTime,
+                      styles.quadroCol,
+                      item.concluida && { color: colors.success },
+                      item.late && { color: colors.error },
+                    ]}
+                  >
+                    {item.subida}
+                  </Text>
                 </View>
               )}
               ListFooterComponent={
@@ -263,32 +342,64 @@ export default function AdminScreen() {
                     tintColor={colors.brandPrimary}
                   />
                 }
-                renderItem={({ item }) => (
-                  <View style={styles.card} testID={`admin-row-${item.id}`}>
-                    <View style={[styles.timeBlock, item.status === 'cancelada' && { backgroundColor: colors.onSurfaceTertiary }]}>
-                      <Text style={styles.timeText}>{item.time}</Text>
-                      <Text style={styles.timeLabel}>{item.type === 'descida' ? 'DESCIDA' : 'SUBIDA'}</Text>
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.cardTitle} numberOfLines={1}>
-                        {item.user_name} • {item.boat_name}
-                      </Text>
-                      {item.type === 'descida' ? (
-                        <Text style={styles.cardMeta} numberOfLines={1}>
-                          {item.destination} • {item.passengers} pax • Ret. {item.expected_return_time}
+                renderItem={({ item }) => {
+                  const rowLate =
+                    item.type === 'subida' && isLate(item.time, item.status === 'concluida');
+                  return (
+                  <View style={[styles.card, rowLate && styles.cardLate]} testID={`admin-row-${item.id}`}>
+                    <View style={styles.cardMain}>
+                      <View style={[styles.timeBlock, item.status === 'cancelada' && { backgroundColor: colors.onSurfaceTertiary }, rowLate && { backgroundColor: colors.error }]}>
+                        <Text style={styles.timeText}>{item.time}</Text>
+                        <Text style={styles.timeLabel}>{item.type === 'descida' ? 'DESCIDA' : 'SUBIDA'}</Text>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.cardTitle} numberOfLines={1}>
+                          {item.user_name} • {item.boat_name}
                         </Text>
-                      ) : (
-                        <Text style={styles.cardMeta}>Retorno agendado</Text>
-                      )}
-                      {item.responsible ? (
-                        <Text style={styles.cardMeta}>Resp.: {item.responsible}</Text>
-                      ) : null}
-                      <View style={{ marginTop: spacing.sm }}>
-                        <StatusBadge status={item.status} />
+                        {item.type === 'descida' ? (
+                          <Text style={styles.cardMeta} numberOfLines={1}>
+                            {item.destination} • {item.passengers} pax • Ret. {item.expected_return_time}
+                          </Text>
+                        ) : (
+                          <Text style={styles.cardMeta}>Retorno agendado</Text>
+                        )}
+                        {item.responsible ? (
+                          <Text style={styles.cardMeta}>Resp.: {item.responsible}</Text>
+                        ) : null}
+                        <View style={{ marginTop: spacing.sm, flexDirection: 'row', gap: spacing.sm, alignItems: 'center' }}>
+                          <StatusBadge status={item.status} />
+                          {rowLate ? (
+                            <View style={styles.lateBadge} testID={`late-badge-${item.id}`}>
+                              <Ionicons name="warning" size={11} color="#FFFFFF" />
+                              <Text style={styles.lateBadgeText}>Atrasada</Text>
+                            </View>
+                          ) : null}
+                        </View>
                       </View>
                     </View>
+                    {item.status === 'agendada' ? (
+                      <View style={styles.adminActions}>
+                        <Pressable
+                          testID={`admin-complete-${item.id}`}
+                          style={({ pressed }) => [styles.adminActionBtn, styles.completeBtn, pressed && { opacity: 0.85 }]}
+                          onPress={() => doComplete(item.id)}
+                        >
+                          <Ionicons name="checkmark-circle-outline" size={16} color={colors.success} />
+                          <Text style={[styles.adminActionText, { color: colors.success }]}>Concluir</Text>
+                        </Pressable>
+                        <Pressable
+                          testID={`admin-cancel-${item.id}`}
+                          style={({ pressed }) => [styles.adminActionBtn, pressed && { opacity: 0.85 }]}
+                          onPress={() => doCancel(item.id)}
+                        >
+                          <Ionicons name="close-circle-outline" size={16} color={colors.error} />
+                          <Text style={[styles.adminActionText, { color: colors.error }]}>Cancelar</Text>
+                        </Pressable>
+                      </View>
+                    ) : null}
                   </View>
-                )}
+                  );
+                }}
               />
             )}
           </>
@@ -309,6 +420,18 @@ const styles = StyleSheet.create({
   kicker: { color: colors.brandSecondary, letterSpacing: 3, fontSize: 11, fontWeight: '700' },
   title: { color: colors.onBrandPrimary, fontSize: 26, fontWeight: '800', marginTop: 4 },
   logoutBtn: { padding: spacing.sm, borderRadius: radius.pill, backgroundColor: 'rgba(255,255,255,0.08)' },
+  alertBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.error,
+    marginHorizontal: spacing.xl,
+    marginTop: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
+  },
+  alertText: { color: '#FFFFFF', fontSize: typography.base, fontWeight: '700', flex: 1 },
   dateNav: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -422,14 +545,41 @@ const styles = StyleSheet.create({
   emptySubtitle: { color: colors.onSurfaceSecondary, fontSize: typography.base, marginTop: spacing.sm },
   list: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xxxl, gap: spacing.md },
   card: {
-    flexDirection: 'row',
-    gap: spacing.md,
     backgroundColor: colors.surfaceSecondary,
     borderRadius: radius.md,
-    padding: spacing.md,
     borderWidth: 1,
     borderColor: colors.border,
+    overflow: 'hidden',
   },
+  cardLate: { borderColor: colors.error, borderWidth: 1.5 },
+  cardMain: { flexDirection: 'row', gap: spacing.md, padding: spacing.md },
+  adminActions: {
+    flexDirection: 'row',
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  adminActionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    paddingVertical: spacing.md,
+  },
+  completeBtn: { borderRightWidth: 1, borderRightColor: colors.border },
+  adminActionText: { fontSize: typography.base, fontWeight: '700' },
+  lateBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: colors.error,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+    borderRadius: radius.pill,
+  },
+  lateBadgeText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
+  quadroRowLate: { backgroundColor: '#FEF2F2' },
+  quadroLateText: { color: colors.error, fontSize: 11, fontWeight: '700' },
   timeBlock: {
     backgroundColor: colors.brandPrimary,
     paddingHorizontal: spacing.md,
