@@ -101,3 +101,70 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+## user_problem_statement: "App Marina Pararanga — iteração 9: PDF do quadro (admin), busca por lancha (admin), e 3 novas features: Conveniência (loja com catálogo), Autorizar Entrada (terceiros na lancha), Emergência (SOS)."
+
+## backend:
+##   - task: "Conveniência: produtos + pedidos"
+##     implemented: true
+##     working: "NA"
+##     file: "backend/server.py"
+##     needs_retesting: true
+##     status_history:
+##         -working: "NA"
+##         -agent: "main"
+##         -comment: "Endpoints GET/POST/PUT/DELETE /products, POST/GET /convenience/orders, PATCH /convenience/orders/{id}/status. Seed de 6 produtos."
+##   - task: "Autorizações"
+##     implemented: true
+##     working: "NA"
+##     file: "backend/server.py"
+##     needs_retesting: true
+##     status_history:
+##         -working: "NA"
+##         -agent: "main"
+##         -comment: "POST/GET /authorizations, PATCH /authorizations/{id}/cancel."
+##   - task: "Emergências"
+##     implemented: true
+##     working: "NA"
+##     file: "backend/server.py"
+##     needs_retesting: true
+##     status_history:
+##         -working: "NA"
+##         -agent: "main"
+##         -comment: "POST/GET /emergencies, PATCH /emergencies/{id}/resolve."
+
+## frontend:
+##   - task: "Admin PDF export + busca por lancha"
+##     implemented: true
+##     working: "NA"
+##     file: "frontend/app/admin.tsx"
+##     needs_retesting: true
+##   - task: "Telas Conveniência / Autorizar / Emergência (cliente)"
+##     implemented: true
+##     working: "NA"
+##     file: "frontend/app/conveniencia.tsx, autorizar.tsx, emergencia.tsx"
+##     needs_retesting: true
+##   - task: "Pedidos & Chamados (admin/staff) + Produtos (admin)"
+##     implemented: true
+##     working: "NA"
+##     file: "frontend/app/admin-solicitacoes.tsx, admin-produtos.tsx"
+##     needs_retesting: true
+
+## metadata:
+##   created_by: "main_agent"
+##   version: "1.9"
+##   test_sequence: 9
+
+## test_plan:
+##   current_focus:
+##     - "Conveniência: produtos + pedidos"
+##     - "Autorizações"
+##     - "Emergências"
+##     - "Telas Conveniência / Autorizar / Emergência (cliente)"
+##     - "Pedidos & Chamados (admin/staff) + Produtos (admin)"
+##   stuck_tasks: []
+##   test_all: false
+##   test_priority: "high_first"
+
+## agent_communication:
+##     -agent: "main"
+##     -message: "Iteração 9 implementada. Testar backend (produtos, pedidos, autorizações, emergências CRUD) e frontend (fluxos cliente das 3 telas; admin/staff Pedidos & Chamados; admin Produtos; PDF/busca do quadro). Credenciais: Admin 00000/0000, Staff 55555/0055, Cliente 11111/1111."

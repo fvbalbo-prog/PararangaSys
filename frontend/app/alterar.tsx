@@ -68,17 +68,6 @@ export default function AlterarScreen() {
     }
   };
 
-  const doConfirm = async (id: string) => {
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    const now = new Date().toISOString();
-    setItems((prev) => prev.map((r) => (r.id === id ? { ...r, status: 'concluida', returned_at: now } : r)));
-    try {
-      await api.confirmReturn(id);
-    } catch {
-      load();
-    }
-  };
-
   const title = type === 'descida' ? 'Alterar Descida' : 'Alterar Subida';
 
   return (
@@ -166,20 +155,12 @@ export default function AlterarScreen() {
                 {isActive && (
                   <View style={styles.actions}>
                     <Pressable
-                      testID={`confirm-return-${item.id}`}
-                      style={({ pressed }) => [styles.actionBtn, styles.confirmBtn, pressed && { opacity: 0.85 }]}
-                      onPress={() => doConfirm(item.id)}
-                    >
-                      <Ionicons name="checkmark-circle-outline" size={16} color={colors.success} />
-                      <Text style={[styles.actionText, { color: colors.success }]}>Confirmar retorno</Text>
-                    </Pressable>
-                    <Pressable
                       testID={`cancel-request-${item.id}`}
                       style={({ pressed }) => [styles.actionBtn, styles.cancelBtn, pressed && { opacity: 0.85 }]}
                       onPress={() => doCancel(item.id)}
                     >
                       <Ionicons name="close-circle-outline" size={16} color={colors.error} />
-                      <Text style={[styles.actionText, { color: colors.error }]}>Cancelar</Text>
+                      <Text style={[styles.actionText, { color: colors.error }]}>Cancelar solicitação</Text>
                     </Pressable>
                   </View>
                 )}

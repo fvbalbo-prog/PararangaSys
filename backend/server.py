@@ -70,6 +70,7 @@ class User(BaseModel):
 
 class LoginInput(BaseModel):
     cpf: str
+    phone: Optional[str] = None
 
 
 class RequestBase(BaseModel):
@@ -225,15 +226,17 @@ async def root():
 @api_router.post("/login")
 async def login(payload: LoginInput):
     digits = normalize_cpf(payload.cpf)
-    if len(digits) < 5:
-        raise HTTPException(status_code=400, detail="Digite os 5 primeiros números do CPF.")
+    phone_digits = re.sub(r"\D", "", payload.phone or "")
+    if len(digits) < 5 or len(phone_digits) < 4:
+        raise HTTPException(status_code=400, detail="Informe os 5 primeiros dígitos do CPF e os 4 últimos do celular.")
     prefix = digits[:5]
-    # Match by the first 5 digits of the CPF (or full CPF if 11 digits given)
-    query = {"cpf": digits} if len(digits) == 11 else {"cpf": {"$regex": f"^{prefix}"}}
-    user = await db.users.find_one(query, {"_id": 0})
-    if not user:
-        raise HTTPException(status_code=404, detail="CPF não cadastrado.")
-    return user
+    last4 = phone_digits[-4:]
+    candidates = await db.users.find({"cpf": {"$regex": f"^{prefix}"}}, {"_id": 0}).to_list(50)
+    for u in candidates:
+        up = re.sub(r"\D", "", u.get("phone", ""))
+        if up[-4:] == last4:
+            return u
+    raise HTTPException(status_code=404, detail="CPF ou celular não confere.")
 
 
 @api_router.get("/users/{cpf}")
@@ -381,6 +384,19 @@ async def complete_request(request_id: str):
     await db.requests.update_one(
         {"id": request_id},
         {"$set": {"status": "concluida", "returned_at": now_iso, "updated_at": now_iso}},
+    )
+    return await db.requests.find_one({"id": request_id}, {"_id": 0})
+
+
+@api_router.patch("/requests/{request_id}/reopen", response_model=RequestOut)
+async def reopen_request(request_id: str):
+    """Staff correction: revert a completed request back to 'aguardando'."""
+    existing = await db.requests.find_one({"id": request_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Solicitação não encontrada.")
+    await db.requests.update_one(
+        {"id": request_id},
+        {"$set": {"status": "agendada", "returned_at": None, "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
     return await db.requests.find_one({"id": request_id}, {"_id": 0})
 
@@ -557,7 +573,235 @@ async def remove_boat(cpf: str, boat: str):
     return await db.users.find_one({"cpf": cpf_clean}, {"_id": 0})
 
 
+# ===================== Conveniência (produtos + pedidos) =====================
+class ProductInput(BaseModel):
+    name: str
+    price: float
+
+
+class ProductUpdate(BaseModel):
+    name: Optional[str] = None
+    price: Optional[float] = None
+    active: Optional[bool] = None
+
+
+class OrderItem(BaseModel):
+    product_id: str
+    name: str
+    price: float
+    qty: int
+
+
+class ConvenienceOrderInput(BaseModel):
+    cpf: str
+    boat_name: Optional[str] = None
+    items: List[OrderItem]
+    observation: Optional[str] = None
+
+
+@api_router.get("/products")
+async def list_products(all: bool = False):
+    query = {} if all else {"active": {"$ne": False}}
+    docs = await db.products.find(query, {"_id": 0}).sort("name", 1).to_list(500)
+    return docs
+
+
+@api_router.post("/products")
+async def create_product(payload: ProductInput):
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Nome do produto é obrigatório.")
+    doc = {"id": str(uuid.uuid4()), "name": name, "price": float(payload.price), "active": True}
+    await db.products.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.put("/products/{pid}")
+async def update_product(pid: str, payload: ProductUpdate):
+    update = {k: v for k, v in payload.dict().items() if v is not None}
+    if "name" in update:
+        update["name"] = update["name"].strip()
+    if "price" in update:
+        update["price"] = float(update["price"])
+    if not update:
+        raise HTTPException(status_code=400, detail="Nada para atualizar.")
+    res = await db.products.update_one({"id": pid}, {"$set": update})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Produto não encontrado.")
+    return await db.products.find_one({"id": pid}, {"_id": 0})
+
+
+@api_router.delete("/products/{pid}")
+async def delete_product(pid: str):
+    res = await db.products.delete_one({"id": pid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Produto não encontrado.")
+    return {"ok": True}
+
+
+@api_router.post("/convenience/orders")
+async def create_order(payload: ConvenienceOrderInput):
+    cpf = normalize_cpf(payload.cpf)
+    user = await db.users.find_one({"cpf": cpf}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="CPF não cadastrado.")
+    items = [i for i in payload.items if i.qty > 0]
+    if not items:
+        raise HTTPException(status_code=400, detail="Selecione ao menos um produto.")
+    total = round(sum(i.price * i.qty for i in items), 2)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "cpf": cpf,
+        "user_name": user["name"],
+        "boat_name": payload.boat_name or user.get("boat_name"),
+        "items": [i.dict() for i in items],
+        "total": total,
+        "observation": payload.observation,
+        "status": "pendente",
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+    await db.convenience_orders.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/convenience/orders")
+async def list_orders(cpf: Optional[str] = None):
+    query = {"cpf": normalize_cpf(cpf)} if cpf else {}
+    docs = await db.convenience_orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return docs
+
+
+@api_router.patch("/convenience/orders/{oid}/status")
+async def set_order_status(oid: str, status: str):
+    if status not in ("pendente", "entregue", "cancelada"):
+        raise HTTPException(status_code=400, detail="Status inválido.")
+    res = await db.convenience_orders.update_one(
+        {"id": oid}, {"$set": {"status": status, "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado.")
+    return await db.convenience_orders.find_one({"id": oid}, {"_id": 0})
+
+
+# ===================== Autorizar Entrada (autorizar terceiros) =====================
+class AuthorizationInput(BaseModel):
+    cpf: str
+    boat_name: str
+    person_name: str
+    date: str  # YYYY-MM-DD
+
+
+@api_router.post("/authorizations")
+async def create_authorization(payload: AuthorizationInput):
+    cpf = normalize_cpf(payload.cpf)
+    user = await db.users.find_one({"cpf": cpf}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="CPF não cadastrado.")
+    if not payload.person_name.strip():
+        raise HTTPException(status_code=400, detail="Nome do autorizado é obrigatório.")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "cpf": cpf,
+        "user_name": user["name"],
+        "boat_name": payload.boat_name,
+        "person_name": payload.person_name.strip(),
+        "date": payload.date,
+        "status": "ativa",
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+    await db.authorizations.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/authorizations")
+async def list_authorizations(cpf: Optional[str] = None):
+    query = {"cpf": normalize_cpf(cpf)} if cpf else {}
+    docs = await db.authorizations.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return docs
+
+
+@api_router.patch("/authorizations/{aid}/cancel")
+async def cancel_authorization(aid: str):
+    res = await db.authorizations.update_one(
+        {"id": aid}, {"$set": {"status": "cancelada", "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Autorização não encontrada.")
+    return await db.authorizations.find_one({"id": aid}, {"_id": 0})
+
+
+# ===================== Emergência =====================
+class EmergencyInput(BaseModel):
+    cpf: str
+    boat_name: Optional[str] = None
+    location: Optional[str] = None
+    observation: Optional[str] = None
+
+
+@api_router.post("/emergencies")
+async def create_emergency(payload: EmergencyInput):
+    cpf = normalize_cpf(payload.cpf)
+    user = await db.users.find_one({"cpf": cpf}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="CPF não cadastrado.")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "cpf": cpf,
+        "user_name": user["name"],
+        "phone": user.get("phone"),
+        "boat_name": payload.boat_name or user.get("boat_name"),
+        "location": payload.location,
+        "observation": payload.observation,
+        "status": "aberta",
+        "created_at": now_iso,
+        "resolved_at": None,
+        "updated_at": now_iso,
+    }
+    await db.emergencies.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/emergencies")
+async def list_emergencies(cpf: Optional[str] = None, status: Optional[str] = None):
+    query = {}
+    if cpf:
+        query["cpf"] = normalize_cpf(cpf)
+    if status:
+        query["status"] = status
+    docs = await db.emergencies.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return docs
+
+
+@api_router.patch("/emergencies/{eid}/resolve")
+async def resolve_emergency(eid: str):
+    now_iso = datetime.now(timezone.utc).isoformat()
+    res = await db.emergencies.update_one(
+        {"id": eid}, {"$set": {"status": "atendida", "resolved_at": now_iso, "updated_at": now_iso}}
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Emergência não encontrada.")
+    return await db.emergencies.find_one({"id": eid}, {"_id": 0})
+
+
 # ===================== Seed =====================
+SEED_PRODUCTS = [
+    {"id": "seed-gelo", "name": "Gelo (saco 5kg)", "price": 15.0, "active": True},
+    {"id": "seed-agua", "name": "Água mineral (fardo 12un)", "price": 24.0, "active": True},
+    {"id": "seed-refri", "name": "Refrigerante (lata)", "price": 6.0, "active": True},
+    {"id": "seed-cerveja", "name": "Cerveja (lata)", "price": 8.0, "active": True},
+    {"id": "seed-salgadinho", "name": "Salgadinho", "price": 12.0, "active": True},
+    {"id": "seed-protetor", "name": "Protetor solar", "price": 45.0, "active": True},
+]
+
 SEED_USERS = [
     {"cpf": "11111111111", "name": "João Silva", "phone": "(48) 99999-1111", "boat_name": "Netuno",
      "boats": [{"name": "Netuno", "draft": 0.8, "length": 22}], "is_admin": False},
@@ -576,6 +820,12 @@ SEED_USERS = [
 async def seed_users():
     for u in SEED_USERS:
         await db.users.update_one({"cpf": u["cpf"]}, {"$set": u}, upsert=True)
+    for p in SEED_PRODUCTS:
+        await db.products.update_one(
+            {"id": p["id"]},
+            {"$setOnInsert": p},
+            upsert=True,
+        )
 
 
 # Include the router

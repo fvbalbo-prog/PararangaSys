@@ -1,0 +1,35 @@
+{
+  "summary": "Iteration 8 fully verified. Backend (13/13 pytest pass): POST /api/login with cpf5+phone4 -> 11111/1111 João (200, is_admin=false, is_staff=false), 00000/0000 Admin (is_admin=true), 55555/0055 Staff (is_staff=true); 11111/9999 -> 404; missing/short phone -> 400; short cpf -> 400. PATCH /api/requests/{id}/reopen flips status from 'concluida' back to 'agendada' and clears returned_at (verified via GET). Regression: /slots, /tides (sp01), GET /users still excludes admin+staff, POST/DELETE /users/{cpf}/boats add+remove with draft/length OK. Frontend (mobile 390x844): (1) Login form has cpf-input maxlen5 + phone-input maxlen4; wrong phone -> login-error banner. (2) Client 11111/1111 redirects to /menu (menu-user-name='Olá, João'), with 4 buttons menu-descida-subida / menu-conveniencia / menu-autorizar / menu-emergencia. The 3 placeholders load conveniencia-screen/autorizar-screen/emergencia-screen with a working back that returns to /menu. (3) menu-descida-subida opens /home (home-user-name visible), cards read exactly 'Alterar Descida'/'Alterar Subida' (NO 'Confirmar' word); home-back returns to /menu. (4) Client Alterar Subida: active row shows ONLY cancel-request-{id} — the previous 'Confirmar retorno' button is GONE (verified by testID absence AND full-body text scan for 'Confirmar retorno' -> not found). Concluded rows show only the 'Retorno confirmado às HH:MM' timestamp with no action buttons. (5) Staff panel: staff-confirm-{id} on agendada; after tap, row transitions to Concluída and shows two correction buttons staff-reopen-{id} + staff-cancel-{id}; reopen restores status='agendada' & returned_at=null (verified via GET /api/requests/{id}); cancel sets status='cancelada' (verified via GET). (6) Admin 00000/0000 redirects to /admin. (7) Boat name 'Netuno' NOT shown under João's name on the menu header. All 6 iteration-8 changes + regression pass.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "shadow* style props deprecation", "issue": "Console shows: '\"shadow*\" style props are deprecated. Use \"boxShadow\".' — still present on login/other screens (index.tsx logoBadge & similar). Non-blocking on native; only web console warning. Reference: /app/frontend/app/index.tsx:132-143"}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_marina_iteration8.py",
+    "/app/test_reports/pytest/iteration8_results.xml"
+  ],
+  "action_items": [
+    "Optional/cosmetic: migrate remaining shadow* style props to boxShadow to silence RN 0.75+ deprecation console warnings on web."
+  ],
+  "critical_code_review_comments": [
+    "server.py:227-239 login combines cpf-prefix regex ($regex ^prefix) + phone last-4 match on the app side; safe because both inputs are digit-normalized before use.",
+    "server.py:391-401 reopen_request sets returned_at=None (not deleting the field) — good, keeps schema stable; RequestOut.returned_at is Optional[str] so JSON returns null.",
+    "app/alterar.tsx:60-69 client cancel is optimistic-then-persist with load() rollback on failure — good pattern.",
+    "app/alterar.tsx has NO doConfirm / confirm-return button — matches spec (only cancel-request-{id} remains).",
+    "app/staff.tsx:59-77 reopen + cancel handlers mirror the optimistic pattern; UI branches by status (agendada -> confirm, concluida -> reopen+cancel, cancelada -> no buttons).",
+    "app/menu.tsx correctly hides boat name; renders 4 Pressables with distinct testIDs and colors; useFocusEffect reloads user from AsyncStorage on return.",
+    "app/home.tsx:96-98 home-back navigates via router.back() to /menu — verified working.",
+    "conveniencia/autorizar/emergencia are thin wrappers around ComingSoon which exposes back navigation testID."
+  ],
+  "updated_files": ["/app/backend/tests/test_marina_iteration8.py (new)"],
+  "success_rate": {"backend": "100% (13/13)", "frontend": "100% (login redirects for client/admin/staff, wrong-phone error, menu 4 buttons + 3 placeholder screens with back, home cards renamed no-Confirmar + home-back, client alterar has only Cancelar (no Confirmar retorno), staff confirm->reopen/cancel flow verified via API, boat name not shown under user name)"},
+  "seed_data_creation": "Frontend flow created one 17:30 subida via API, exercised staff confirm/reopen/cancel, then DELETE'd it. Backend test created and cleaned one 17:30 subida in TestReopen.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Login now requires BOTH inputs: cpf-input (5 digits) + phone-input (4 digits). Test combos: 11111/1111 João -> /menu, 22222/2222 Maria, 33333/3333 Carlos, 00000/0000 Admin -> /admin, 55555/0055 Staff -> /staff. Menu screen testIDs: menu-user-name, menu-descida-subida, menu-conveniencia, menu-autorizar, menu-emergencia, menu-logout. Placeholders: conveniencia-screen/autorizar-screen/emergencia-screen with back via coming-soon-back (fallback back-button). Hub: home-user-name, card-solicitar-descida, card-solicitar-subida, card-alterar-descida, card-alterar-subida, home-back. Client alterar rows: request-row-{id}, cancel-request-{id} (no confirm-return-{id} anymore). Staff rows: staff-row-{id}, staff-confirm-{id} (agendada) OR staff-reopen-{id} + staff-cancel-{id} (concluida). Reopen endpoint: PATCH /api/requests/{id}/reopen -> status='agendada', returned_at=null. Today's date in preview environment is 2026-08-18. Use time '17:30' subida for unlimited-slot seeding to avoid capacity 409s."
+}

@@ -23,25 +23,32 @@ function formatCpf(value: string) {
 export default function LoginScreen() {
   const router = useRouter();
   const [cpf, setCpf] = useState('');
+  const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleLogin = async () => {
     setError(null);
     const digits = cpf.replace(/\D/g, '');
+    const phoneDigits = phone.replace(/\D/g, '');
     if (digits.length !== 5) {
       setError('Digite os 5 primeiros números do CPF.');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       return;
     }
+    if (phoneDigits.length !== 4) {
+      setError('Digite os 4 últimos números do celular.');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      return;
+    }
     try {
       setLoading(true);
-      const user = await api.login(digits);
+      const user = await api.login(digits, phoneDigits);
       await AsyncStorage.setItem('user', JSON.stringify(user));
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      router.replace(user.is_admin ? '/admin' : user.is_staff ? '/staff' : '/home');
+      router.replace(user.is_admin ? '/admin' : user.is_staff ? '/staff' : '/menu');
     } catch (e: any) {
-      setError(e.message || 'CPF não cadastrado.');
+      setError(e.message || 'CPF ou celular não confere.');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
       setLoading(false);
@@ -80,12 +87,25 @@ export default function LoginScreen() {
               maxLength={5}
               autoFocus
             />
+
+            <Text style={[styles.label, { marginTop: spacing.lg }]}>Celular (4 últimos números)</Text>
+            <TextInput
+              testID="phone-input"
+              style={styles.input}
+              value={phone}
+              onChangeText={(v) => setPhone(v.replace(/\D/g, '').slice(0, 4))}
+              placeholder="0000"
+              placeholderTextColor={colors.onSurfaceTertiary}
+              keyboardType="number-pad"
+              inputMode="numeric"
+              maxLength={4}
+            />
             {error ? (
               <Text style={styles.errorText} testID="login-error">
                 {error}
               </Text>
             ) : (
-              <Text style={styles.hint}>Digite os 5 primeiros números do seu CPF</Text>
+              <Text style={styles.hint}>5 primeiros números do CPF e 4 últimos do celular</Text>
             )}
 
             <Pressable
@@ -109,18 +129,6 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.surface },
   hero: { height: '46%', justifyContent: 'center', alignItems: 'center', backgroundColor: colors.brandPrimary },
-  logoBadge: {
-    alignSelf: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: radius.lg,
-    paddingHorizontal: spacing.xxl,
-    paddingVertical: spacing.xl,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-    elevation: 8,
-  },
   logoOverlay: { width: 300, height: 150 },
   heroTagline: {
     color: colors.onBrandPrimary,

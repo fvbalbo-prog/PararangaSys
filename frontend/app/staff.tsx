@@ -56,6 +56,26 @@ export default function StaffScreen() {
     }
   };
 
+  const reopen = async (id: string) => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    setItems((prev) => prev.map((r) => (r.id === id ? { ...r, status: 'agendada', returned_at: null } : r)));
+    try {
+      await api.reopenRequest(id);
+    } catch {
+      load();
+    }
+  };
+
+  const cancel = async (id: string) => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    setItems((prev) => prev.map((r) => (r.id === id ? { ...r, status: 'cancelada' } : r)));
+    try {
+      await api.cancelRequest(id);
+    } catch {
+      load();
+    }
+  };
+
   const logout = async () => {
     await AsyncStorage.removeItem('user');
     router.replace('/');
@@ -70,6 +90,14 @@ export default function StaffScreen() {
           <Text style={styles.kicker}>FUNCIONÁRIOS</Text>
           <Text style={styles.title} testID="staff-title">Confirmar movimentações</Text>
         </View>
+        <Pressable
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-solicitacoes'); }}
+          hitSlop={12}
+          testID="staff-solicitacoes-button"
+          style={[styles.logoutBtn, { marginRight: spacing.sm }]}
+        >
+          <Ionicons name="receipt-outline" size={22} color={colors.onBrandPrimary} />
+        </Pressable>
         <Pressable onPress={logout} hitSlop={12} testID="staff-logout" style={styles.logoutBtn}>
           <Ionicons name="log-out-outline" size={22} color={colors.onBrandPrimary} />
         </Pressable>
@@ -111,6 +139,25 @@ export default function StaffScreen() {
                     <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
                     <Text style={styles.confirmText}>Confirmar {item.type === 'descida' ? 'descida' : 'subida'}</Text>
                   </Pressable>
+                ) : item.status === 'concluida' ? (
+                  <View style={styles.correctRow}>
+                    <Pressable
+                      testID={`staff-reopen-${item.id}`}
+                      style={({ pressed }) => [styles.correctBtn, { borderRightWidth: 1, borderRightColor: colors.border }, pressed && { opacity: 0.85 }]}
+                      onPress={() => reopen(item.id)}
+                    >
+                      <Ionicons name="arrow-undo-outline" size={16} color={colors.info} />
+                      <Text style={[styles.correctText, { color: colors.info }]}>Voltar p/ Aguardando</Text>
+                    </Pressable>
+                    <Pressable
+                      testID={`staff-cancel-${item.id}`}
+                      style={({ pressed }) => [styles.correctBtn, pressed && { opacity: 0.85 }]}
+                      onPress={() => cancel(item.id)}
+                    >
+                      <Ionicons name="close-circle-outline" size={16} color={colors.error} />
+                      <Text style={[styles.correctText, { color: colors.error }]}>Cancelar</Text>
+                    </Pressable>
+                  </View>
                 ) : null}
               </View>
             )}
@@ -141,4 +188,7 @@ const styles = StyleSheet.create({
   meta: { color: colors.onSurfaceSecondary, fontSize: typography.sm, marginTop: 2 },
   confirmBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, backgroundColor: colors.success, paddingVertical: spacing.md },
   confirmText: { color: '#FFFFFF', fontSize: typography.base, fontWeight: '700' },
+  correctRow: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: colors.border },
+  correctBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs, paddingVertical: spacing.md },
+  correctText: { fontSize: typography.sm, fontWeight: '700' },
 });

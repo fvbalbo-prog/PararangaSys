@@ -59,12 +59,27 @@ Aplicativo mobile (React Native/Expo) para os proprietários de lanchas da Marin
 - **Painel de Status (somente leitura)** (`/admin-status`, botão no painel admin): 2 seções por ordem de horário — Descidas solicitadas e Subidas solicitadas (Lancha/Horário/Status/Observação).
 - **Rótulos**: cards da home renomeados para "Confirmar/Alterar Descida" e "Confirmar/Alterar Subida".
 
+## Features adicionadas (2026-08-18 - iteração 8)
+- **Login CPF (5) + Celular (4)**: exige os 5 primeiros dígitos do CPF e os 4 últimos do celular.
+- **Menu do cliente** (`/menu`) após login: Descida/Subida (hub), Conveniência, Autorizar Entrada, Emergência (as 3 últimas são placeholders "Em breve").
+- **Cliente não conclui**: removido o botão "Confirmar retorno" da tela do cliente (só Cancelar). Conclusão apenas no painel de funcionários.
+- **Correção de status no painel de funcionários**: em itens concluídos, funcionário pode "Voltar p/ Aguardando" (PATCH /reopen) ou Cancelar.
+- **Rótulos**: cards da home voltaram a "Alterar Descida"/"Alterar Subida"; removido o nome da lancha abaixo do nome do cliente.
+
 ## CPFs e perfis
 - `11111` João (cliente) • `22222` Maria • `33333` Carlos • `00000` Admin (painel completo) • `55555` Funcionário (apenas confirmar).
 
 ## Backlog (solicitado, ainda pendente)
-- Busca por lancha no quadro
-- Exportar quadro do dia em PDF
+- (nenhum pendente)
+
+## Features adicionadas (2026-06 - iteração 9)
+- **Exportar Quadro em PDF** (Painel da Marina): botão de impressão gera o quadro do dia (Lancha / Descida / Subida / Maré) em PDF via expo-print + expo-sharing, com destaque de lanchas atrasadas.
+- **Busca por lancha** no Painel da Marina: filtra Movimentação e Quadro pelo nome da lancha.
+- **Conveniência** (`/conveniencia`): cliente monta pedido a partir de catálogo pré-definido (admin gerencia em `/admin-produtos`), escolhe quantidades + observação; vê "Meus pedidos". Backend: `products`, `convenience_orders`.
+- **Autorizar Entrada** (`/autorizar`): cliente autoriza terceiro a usar a lancha (nome + lancha + data); lista/cancela autorizações. Backend: `authorizations`.
+- **Emergência** (`/emergencia`): botão SOS com confirmação, registra chamado (cliente + lancha + local/observação); cliente vê histórico. Backend: `emergencies`.
+- **Pedidos & Chamados** (`/admin-solicitacoes`, acesso admin e funcionário): abas Conveniência / Autorizações / Emergências. Equipe entrega/cancela pedidos, cancela autorizações e marca emergências como atendidas (badge de emergências abertas).
+- **Gestão de Produtos** (`/admin-produtos`): admin adiciona/remove produtos, ativa/desativa e define preços.
 
 ## CPF administrador
 - `00000000000` — Administração Marina (redireciona para o Painel).

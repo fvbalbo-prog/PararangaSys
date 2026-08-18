@@ -39,7 +39,7 @@ const CARDS: CardDef[] = [
   },
   {
     id: 'alt-desc',
-    title: 'Confirmar/Alterar Descida',
+    title: 'Alterar Descida',
     subtitle: 'Editar solicitações do dia',
     icon: 'create-outline',
     variant: 'secondary',
@@ -48,7 +48,7 @@ const CARDS: CardDef[] = [
   },
   {
     id: 'alt-sub',
-    title: 'Confirmar/Alterar Subida',
+    title: 'Alterar Subida',
     subtitle: 'Editar solicitações do dia',
     icon: 'time-outline',
     variant: 'secondary',
@@ -82,12 +82,6 @@ export default function HomeScreen() {
     loadUser();
   }, [loadUser]);
 
-  const handleLogout = async () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    await AsyncStorage.removeItem('user');
-    router.replace('/');
-  };
-
   if (loading || !user) {
     return (
       <View style={[styles.root, { justifyContent: 'center', alignItems: 'center' }]}>
@@ -99,17 +93,13 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
       <View style={styles.header} testID="home-header">
-        <View style={{ flex: 1 }}>
-          <Text style={styles.kicker}>MARINA PARARANGA</Text>
-          <Text style={styles.name} testID="home-user-name">Olá, {user.name.split(' ')[0]}</Text>
-          <View style={styles.boatRow}>
-            <Ionicons name="boat" size={14} color={colors.brandSecondary} />
-            <Text style={styles.boatText}>{user.boat_name}</Text>
-          </View>
-        </View>
-        <Pressable onPress={handleLogout} hitSlop={12} testID="logout-button" style={styles.logoutBtn}>
-          <Ionicons name="log-out-outline" size={22} color={colors.onBrandPrimary} />
+        <Pressable onPress={() => router.back()} hitSlop={12} testID="home-back" style={[styles.logoutBtn, { marginRight: spacing.md }]}>
+          <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
         </Pressable>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.kicker}>DESCIDA / SUBIDA</Text>
+          <Text style={styles.name} testID="home-user-name">Olá, {user.name.split(' ')[0]}</Text>
+        </View>
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>

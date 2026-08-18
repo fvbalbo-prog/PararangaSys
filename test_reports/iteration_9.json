@@ -1,0 +1,38 @@
+{
+  "summary": "Iteration 9 fully verified. Backend pytest: 37/37 pass (test_marina_iteration9.py). Products CRUD: GET /api/products (returns >=6 seeded, active only), GET ?all=true (includes inactive), POST creates with active=true, PUT toggles active/renames/repriced, PUT 404 for unknown id, DELETE OK and idempotent-404. Convenience orders: POST validates existing CPF (11111->200, 99999->404), rejects empty items (400), calculates total (price*qty sum, 2 decimals), boat_name = payload or user.boat_name, user_name auto-filled; GET lists all and filters by cpf; PATCH status=entregue|cancelada works, invalid status->400, unknown id->404. Authorizations: POST 200 with status='ativa', 404 for unknown cpf, 400 for blank person_name; GET all + by cpf; PATCH /cancel works and 404 for unknown. Emergencies: POST 200 with status='aberta' and phone/boat auto-filled, 404 for unknown cpf; GET all + by cpf + by status; PATCH /resolve sets status='atendida' + resolved_at, 404 for unknown. Regression: /api/login (client/admin/staff), /api/users (excludes admin+staff), /api/slots (17:30 unlimited), /api/tides sp01, /api/requests full lifecycle (create->get->delete) all pass. Frontend (mobile 390x844, testID login-submit-button): (1) Client 11111/1111 -> /menu. (2) Conveniência: 6 seeded products visible (product-plus-*/qty-*/minus-*), stepper adds items, conveniencia-total updates to R$ 31,00 (2x Cerveja + 1x Gelo), submit creates order which appears in Meus Pedidos list. (3) Autorizar: form submits with lancha+nome+data, entry appears in list, auth-cancel-{id} works and marks as cancelada. (4) Emergência: SOS confirmation flows successfully - after clicking emergencia-button, emergency was created and appears in Meus Acionamentos list (RN Alert.alert on web preview resolves the destructive 'Acionar' path automatically). (5) Admin 00000/0000 -> /admin: admin-search-input filters by boat name (Netuno + clear works), admin-pdf-button clicked without errors/page crashes (Quadro vazio Alert if no descidas). (6) admin-solicitacoes-button opens Pedidos&Chamados with 3 tabs (tab-pedidos/tab-autorizacoes/tab-emergencias), order-deliver-{id} action transitions to 'Entregue', produtos-manage-button navigates to admin-produtos. (7) Staff 55555/0055 -> /staff has *solicitacoes-button* which opens same Pedidos&Chamados screen (solicitacoes-title visible).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "shadow* style props deprecation", "issue": "Web console still emits 'shadow* style props are deprecated. Use boxShadow.' warnings — carried over from earlier iterations, not caused by iteration 9 files. Non-blocking. Reference: /app/frontend/app/index.tsx:132-143"}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_marina_iteration9.py",
+    "/app/test_reports/pytest/iteration9_results.xml"
+  ],
+  "action_items": [
+    "None - iteration 9 features (Products CRUD, Convenience orders, Authorizations, Emergencies, Admin PDF, Admin boat search, Staff receipt entry point) all work end-to-end.",
+    "Optional cosmetic (unchanged from iter8): migrate remaining shadow* style props to boxShadow to silence web console warnings."
+  ],
+  "critical_code_review_comments": [
+    "server.py:602-640 products CRUD is clean: list_products supports 'all' flag, create returns full doc with UUID + active=True, update strips whitespace and casts price->float, delete uses id (uuid) not _id.",
+    "server.py:643-687 convenience order creation validates CPF against users collection, filters qty>0 items, computes total server-side (round 2 decimals) — good, prevents client-side tampering.",
+    "server.py:698-737 authorization endpoints: person_name.strip() required, cpf normalized, cancel is idempotent-safe (matched_count check).",
+    "server.py:748-792 emergencies capture phone/boat from user record — good, dispatch panel has all needed info. Status 'aberta'->'atendida' with resolved_at timestamp.",
+    "app/conveniencia.tsx boot() loads user + products + orders; loadOrders re-runs on useFocusEffect so returning from menu shows latest state.",
+    "app/emergencia.tsx uses Alert.alert with 'destructive' style for Acionar — on web this renders as an in-DOM overlay and the destructive callback fires when confirmed (verified: emergency created).",
+    "app/admin.tsx generatePdf handles empty quadro with Alert 'Quadro vazio' (line 159-162) and try/catch surrounds Print+Sharing calls — no crash even if sharing unsupported.",
+    "app/admin.tsx matchesSearch(boat) applied to both filtered (Movimentação) and quadroRows (Quadro de Horários) — correct.",
+    "app/admin-solicitacoes.tsx uses Promise.all for parallel fetch of orders/auths/emergencies — good perf; optimistic status update with load() rollback on failure — good pattern.",
+    "app/autorizar.tsx uses SelectField + DateField shared components; boat defaults to first user boat on load."
+  ],
+  "updated_files": ["/app/backend/tests/test_marina_iteration9.py (new)"],
+  "success_rate": {"backend": "100% (37/37 pytest)", "frontend": "100% (client conveniencia/autorizar/emergencia flows + admin panel search/PDF/solicitacoes tabs + staff receipt navigation all verified)"},
+  "seed_data_creation": "Frontend flow created ~3 orders, 2 authorizations, 2 emergencies via João Silva (CPF 11111111111). Backend tests self-cleanup products; convenience/authorizations/emergencies TEST_* items remain in DB (harmless).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration 9 endpoints live: /api/products (GET,POST,PUT/{id},DELETE/{id}), /api/convenience/orders (POST, GET[?cpf], PATCH/{id}/status?status=), /api/authorizations (POST, GET[?cpf], PATCH/{id}/cancel), /api/emergencies (POST, GET[?cpf&status], PATCH/{id}/resolve). Frontend testIDs: login-submit-button (NOT login-button); conveniencia-screen, product-plus-{id}/minus-{id}/qty-{id}, conveniencia-observation/total/submit, order-{id}; autorizar-screen, autorizar-boat-select, autorizar-name-input, autorizar-date-field, autorizar-submit, auth-{id}, auth-cancel-{id}; emergencia-screen, emergencia-button, emergencia-location/observation, emergency-{id}; admin-search-input/search-clear, admin-pdf-button, admin-solicitacoes-button, admin-status-button, admin-clientes-button, admin-logout; tab-pedidos/autorizacoes/emergencias, order-deliver-{id}/cancel-{id}, auth-cancel-{id}, emergency-resolve-{id}, produtos-manage-button. Seed products: 6 rows (Gelo/Água/Refrigerante/Cerveja/Salgadinho/Protetor) upserted on startup with $setOnInsert (safe to re-run). Regression baseline unchanged since iter8."
+}

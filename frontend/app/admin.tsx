@@ -8,12 +8,16 @@ import {
   ActivityIndicator,
   RefreshControl,
   ScrollView,
+  TextInput,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { api } from '@/src/api';
 import type { MarinaRequest, RequestType } from '@/src/api';
@@ -49,6 +53,8 @@ export default function AdminScreen() {
   const [items, setItems] = useState<MarinaRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [search, setSearch] = useState('');
+  const [generating, setGenerating] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -117,7 +123,12 @@ export default function AdminScreen() {
     return isToday && !concluded && ref != null && nowMin > ref + 15;
   };
 
-  const filtered = items.filter((i) => (filter === 'todas' ? true : i.type === filter));
+  const q = search.trim().toLowerCase();
+  const matchesSearch = (name?: string | null) => !q || (name || '').toLowerCase().includes(q);
+
+  const filtered = items.filter(
+    (i) => (filter === 'todas' ? true : i.type === filter) && matchesSearch(i.boat_name)
+  );
   const descidas = items.filter((i) => i.type === 'descida' && i.status !== 'cancelada').length;
   const subidas = items.filter((i) => i.type === 'subida' && i.status !== 'cancelada').length;
   const retornos = items.filter((i) => i.status === 'concluida').length;
@@ -125,7 +136,7 @@ export default function AdminScreen() {
   // Quadro de Horários: for each descida, find its boat's subida time
   const activeSubidas = items.filter((i) => i.type === 'subida' && i.status !== 'cancelada');
   const quadroRows = items
-    .filter((i) => i.type === 'descida' && i.status !== 'cancelada')
+    .filter((i) => i.type === 'descida' && i.status !== 'cancelada' && matchesSearch(i.boat_name))
     .sort((a, b) => a.time.localeCompare(b.time))
     .map((d) => {
       const sub = activeSubidas.find((s) => s.boat_name === d.boat_name);
@@ -136,12 +147,77 @@ export default function AdminScreen() {
         boat: d.boat_name || '—',
         descida: d.time,
         subida: sub ? sub.time : d.expected_return_time ? `${d.expected_return_time}*` : '—',
+        tide: d.tide_height,
         concluida: concluded,
         late: isLate(refTime, concluded),
       };
     });
 
   const lateCount = quadroRows.filter((r) => r.late).length;
+
+  const generatePdf = async () => {
+    if (quadroRows.length === 0) {
+      Alert.alert('Quadro vazio', 'Não há descidas neste dia para gerar o PDF.');
+      return;
+    }
+    try {
+      setGenerating(true);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      const rowsHtml = quadroRows
+        .map((r) => {
+          const tideTxt = r.tide != null ? `${r.tide.toFixed(2)} m` : '—';
+          const rowStyle = r.late ? ' style="background:#FEE2E2;"' : '';
+          const lateTag = r.late ? ' <span style="color:#DC2626;font-weight:700;">(ATRASADA)</span>' : '';
+          return `<tr${rowStyle}>
+            <td class="boat">${r.boat}${lateTag}</td>
+            <td class="c">${r.descida}</td>
+            <td class="c">${r.subida}</td>
+            <td class="c">${tideTxt}</td>
+          </tr>`;
+        })
+        .join('');
+      const lateNote = lateCount > 0
+        ? `<p class="alert">⚠ ${lateCount} ${lateCount === 1 ? 'lancha atrasada' : 'lanchas atrasadas'} (destacadas em vermelho).</p>`
+        : '';
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/>
+        <style>
+          * { font-family: -apple-system, Helvetica, Arial, sans-serif; }
+          body { padding: 28px; color: #0B2545; }
+          h1 { font-size: 22px; margin: 0; }
+          h2 { font-size: 15px; font-weight: 500; color: #475569; margin: 4px 0 18px; }
+          .alert { background:#FEE2E2; color:#991B1B; padding:8px 12px; border-radius:6px; font-size:13px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+          th { background:#0B2545; color:#fff; text-align:left; padding:10px; font-size:13px; }
+          td { padding:10px; border-bottom:1px solid #E2E8F0; font-size:14px; }
+          td.c { text-align:center; }
+          td.boat { font-weight:700; }
+          th.c { text-align:center; }
+          .foot { margin-top:16px; font-size:11px; color:#94A3B8; }
+        </style></head><body>
+        <h1>Marina Pararanga — Quadro do Dia</h1>
+        <h2>${labelForDate(day)}</h2>
+        ${lateNote}
+        <table>
+          <thead><tr>
+            <th>Lancha</th><th class="c">Descida</th><th class="c">Subida</th><th class="c">Maré</th>
+          </tr></thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+        <p class="foot">* horário previsto de retorno (sem solicitação de subida). Gerado em ${new Date().toLocaleString('pt-BR')}.</p>
+        </body></html>`;
+
+      const { uri } = await Print.printToFileAsync({ html });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Quadro do dia' });
+      } else {
+        await Print.printAsync({ uri });
+      }
+    } catch {
+      Alert.alert('Erro', 'Não foi possível gerar o PDF.');
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
@@ -151,10 +227,31 @@ export default function AdminScreen() {
           <Text style={styles.title} testID="admin-title">Movimentação do dia</Text>
         </View>
         <Pressable
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-solicitacoes'); }}
+          hitSlop={12}
+          testID="admin-solicitacoes-button"
+          style={styles.logoutBtn}
+        >
+          <Ionicons name="receipt-outline" size={22} color={colors.onBrandPrimary} />
+        </Pressable>
+        <Pressable
+          onPress={generatePdf}
+          hitSlop={12}
+          testID="admin-pdf-button"
+          disabled={generating}
+          style={[styles.logoutBtn, { marginLeft: spacing.sm }]}
+        >
+          {generating ? (
+            <ActivityIndicator size="small" color={colors.onBrandPrimary} />
+          ) : (
+            <Ionicons name="print-outline" size={22} color={colors.onBrandPrimary} />
+          )}
+        </Pressable>
+        <Pressable
           onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-status'); }}
           hitSlop={12}
           testID="admin-status-button"
-          style={styles.logoutBtn}
+          style={[styles.logoutBtn, { marginLeft: spacing.sm }]}
         >
           <Ionicons name="eye-outline" size={22} color={colors.onBrandPrimary} />
         </Pressable>
@@ -229,6 +326,25 @@ export default function AdminScreen() {
           </Pressable>
         </View>
 
+        <View style={styles.searchWrap}>
+          <Ionicons name="search-outline" size={18} color={colors.onSurfaceTertiary} />
+          <TextInput
+            testID="admin-search-input"
+            style={styles.searchInput}
+            value={search}
+            onChangeText={setSearch}
+            placeholder="Buscar por lancha..."
+            placeholderTextColor={colors.onSurfaceTertiary}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          {search.length > 0 ? (
+            <Pressable onPress={() => setSearch('')} hitSlop={8} testID="admin-search-clear">
+              <Ionicons name="close-circle" size={18} color={colors.onSurfaceTertiary} />
+            </Pressable>
+          ) : null}
+        </View>
+
         {mode === 'quadro' ? (
           loading ? (
             <View style={styles.center}>
@@ -252,6 +368,7 @@ export default function AdminScreen() {
                   <Text style={[styles.quadroHeadText, { flex: 2 }]}>Lancha</Text>
                   <Text style={[styles.quadroHeadText, styles.quadroCol]}>Descida</Text>
                   <Text style={[styles.quadroHeadText, styles.quadroCol]}>Subida</Text>
+                  <Text style={[styles.quadroHeadText, styles.quadroCol]}>Maré</Text>
                 </View>
               }
               refreshControl={
@@ -287,6 +404,9 @@ export default function AdminScreen() {
                     ]}
                   >
                     {item.subida}
+                  </Text>
+                  <Text style={[styles.quadroTide, styles.quadroCol]}>
+                    {item.tide != null ? `${item.tide.toFixed(2)}m` : '—'}
                   </Text>
                 </View>
               )}
@@ -522,6 +642,25 @@ const styles = StyleSheet.create({
   },
   quadroBoat: { color: colors.onSurface, fontSize: typography.base, fontWeight: '700', flexShrink: 1 },
   quadroTime: { color: colors.onSurface, fontSize: typography.lg, fontWeight: '700' },
+  quadroTide: { color: colors.onSurfaceSecondary, fontSize: typography.sm, fontWeight: '600' },
+  searchWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.md,
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.surfaceSecondary,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  searchInput: {
+    flex: 1,
+    paddingVertical: spacing.md,
+    fontSize: typography.base,
+    color: colors.onSurface,
+  },
   quadroNote: { color: colors.onSurfaceTertiary, fontSize: typography.sm, marginTop: spacing.md, textAlign: 'center' },
   chipScroller: { maxHeight: 56 },
   chipRow: { gap: spacing.sm, paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
