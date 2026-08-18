@@ -55,13 +55,23 @@ export default function AdminScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState('');
   const [generating, setGenerating] = useState(false);
+  const [orderTotals, setOrderTotals] = useState<Record<string, number>>({});
 
   const load = useCallback(async () => {
     try {
       const raw = await AsyncStorage.getItem('user');
       if (!raw) return router.replace('/');
-      const data = await api.dayRequests(toISO(day));
+      const iso = toISO(day);
+      const [data, orders] = await Promise.all([api.dayRequests(iso), api.listOrders().catch(() => [])]);
       setItems(data);
+      const totals: Record<string, number> = {};
+      for (const o of orders) {
+        if (o.status === 'cancelada') continue;
+        if (!o.created_at?.startsWith(iso)) continue;
+        const key = o.boat_name || '—';
+        totals[key] = (totals[key] || 0) + o.total;
+      }
+      setOrderTotals(totals);
     } catch {
       setItems([]);
     } finally {
@@ -148,12 +158,15 @@ export default function AdminScreen() {
         descida: d.time,
         subida: sub ? sub.time : d.expected_return_time ? `${d.expected_return_time}*` : '—',
         tide: d.tide_height,
+        conv: orderTotals[d.boat_name || '—'] || 0,
         concluida: concluded,
         late: isLate(refTime, concluded),
       };
     });
 
   const lateCount = quadroRows.filter((r) => r.late).length;
+  const convTotalDay = Object.values(orderTotals).reduce((a, b) => a + b, 0);
+  const brl = (v: number) => `R$ ${v.toFixed(2).replace('.', ',')}`;
 
   const generatePdf = async () => {
     if (quadroRows.length === 0) {
@@ -166,6 +179,7 @@ export default function AdminScreen() {
       const rowsHtml = quadroRows
         .map((r) => {
           const tideTxt = r.tide != null ? `${r.tide.toFixed(2)} m` : '—';
+          const convTxt = r.conv > 0 ? brl(r.conv) : '—';
           const rowStyle = r.late ? ' style="background:#FEE2E2;"' : '';
           const lateTag = r.late ? ' <span style="color:#DC2626;font-weight:700;">(ATRASADA)</span>' : '';
           return `<tr${rowStyle}>
@@ -173,11 +187,15 @@ export default function AdminScreen() {
             <td class="c">${r.descida}</td>
             <td class="c">${r.subida}</td>
             <td class="c">${tideTxt}</td>
+            <td class="c">${convTxt}</td>
           </tr>`;
         })
         .join('');
       const lateNote = lateCount > 0
         ? `<p class="alert">⚠ ${lateCount} ${lateCount === 1 ? 'lancha atrasada' : 'lanchas atrasadas'} (destacadas em vermelho).</p>`
+        : '';
+      const convNote = convTotalDay > 0
+        ? `<p class="conv">🛒 Conveniência do dia: <strong>${brl(convTotalDay)}</strong></p>`
         : '';
       const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/>
         <style>
@@ -186,6 +204,7 @@ export default function AdminScreen() {
           h1 { font-size: 22px; margin: 0; }
           h2 { font-size: 15px; font-weight: 500; color: #475569; margin: 4px 0 18px; }
           .alert { background:#FEE2E2; color:#991B1B; padding:8px 12px; border-radius:6px; font-size:13px; }
+          .conv { background:#ECFDF5; color:#065F46; padding:8px 12px; border-radius:6px; font-size:13px; }
           table { width: 100%; border-collapse: collapse; margin-top: 10px; }
           th { background:#0B2545; color:#fff; text-align:left; padding:10px; font-size:13px; }
           td { padding:10px; border-bottom:1px solid #E2E8F0; font-size:14px; }
@@ -197,9 +216,10 @@ export default function AdminScreen() {
         <h1>Marina Pararanga — Quadro do Dia</h1>
         <h2>${labelForDate(day)}</h2>
         ${lateNote}
+        ${convNote}
         <table>
           <thead><tr>
-            <th>Lancha</th><th class="c">Descida</th><th class="c">Subida</th><th class="c">Maré</th>
+            <th>Lancha</th><th class="c">Descida</th><th class="c">Subida</th><th class="c">Maré</th><th class="c">Conveniência</th>
           </tr></thead>
           <tbody>${rowsHtml}</tbody>
         </table>

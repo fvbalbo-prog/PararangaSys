@@ -1,0 +1,41 @@
+{
+  "summary": "Iteration 9.1 verified. Backend pytest test_marina_iteration91.py: 13/14 passing. Frontend: all 4 refinements confirmed working. (1) Products in_stock: PUT /api/products/{id} with {in_stock:false} persists; POST /api/convenience/orders with an in_stock:false item returns 400 'Sem estoque: <name>'; with active:false returns 400 'Produto indispon\u00edvel: <name>'; restoring in_stock:true+active:true allows the order (total computed server-side, status=pendente). GET /api/products?all=true still includes inactive items. (2) Regression OK: /api/login (client/admin/staff), /api/users list, /api/slots, /api/requests full lifecycle (create -> get -> delete), /api/convenience/orders list, /api/authorizations create+cancel, /api/emergencies list & create. (3) Admin /admin-produtos: produto-stock-{id} toggles in_stock (icon flips, 'Sem estoque' red tag appears; 5 in-stock + 1 out-of-stock verified visually); produto-toggle-{id} switches active on/off. (4) Client /conveniencia: seed-cerveja rendered with testID product-nostock-seed-cerveja and NO product-plus/minus/qty buttons; the 5 remaining products still have steppers; adding a Cerveja replacement item still updates conveniencia-total. (5) Staff /staff: staff-emergency-banner rendered at top when open emergencies exist ('2 emerg\u00eancias abertas!'), tap navigates to /admin-solicitacoes. (6) Admin /admin-solicitacoes -> Autoriza\u00e7\u00f5es: default scope is auth-scope-hoje (showed 1 card for the auth created with date=today, status=ativa); auth-scope-todas shows 4 cards (all statuses/dates); toggle back to hoje works. (7) Admin /admin -> admin-pdf-button clicks without any pageerror on the web preview (Print+Sharing branch executes; empty-quadro path also guarded). One test failure: 4/6 seeded products in the DB were inserted before the in_stock field existed and, because seed uses $setOnInsert, they never received it; API returns them without the in_stock key. UI treats missing as in-stock so UX is unaffected, but the contract 'produtos retornam campo in_stock' fails for legacy rows. Deprecated packages detected: none new in this iteration (shadow* style props warning persists from earlier iters, not blocking).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/products", "issue": "Legacy seeded products (seed-protetor, seed-refri, seed-salgadinho, seed-agua) are missing the 'in_stock' key in the response because startup seed uses $setOnInsert. New/toggled products carry the field. Frontend handles absence gracefully (treats as in-stock), but the API contract stated in the review is not uniform. Fix: on startup, run `db.products.update_many({'in_stock': {'$exists': False}}, {'$set': {'in_stock': True}})` alongside the existing seed upsert."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "shadow* style props deprecation", "issue": "Web console still emits 'shadow* style props are deprecated. Use boxShadow.' warnings from earlier iterations (index.tsx, admin.tsx). Non-blocking. Reference: /app/frontend/app/index.tsx and /app/frontend/app/admin.tsx"}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_marina_iteration91.py",
+    "/app/test_reports/pytest/iteration91_results.xml"
+  ],
+  "action_items": [
+    "Backfill 'in_stock: true' on legacy seeded products in the seed_users() startup hook (or switch the products seed to $set for that field only) so GET /api/products consistently returns in_stock.",
+    "Optional cleanup: two open emergencies + one active authorization (TEST_iter91_hoje_UI, date=today) remain in DB after this run \u2014 harmless, and the emergency is actually useful for banner regression on next run."
+  ],
+  "critical_code_review_comments": [
+    "server.py:603-641 update_product accepts {in_stock: bool} independently of active; good separation, no coupling.",
+    "server.py:653-660 create_order rejects both active:false ('Produto indispon\u00edvel') and in_stock:false ('Sem estoque'); ordering guarantees the correct message when both flags are false.",
+    "admin-produtos.tsx:75-77 toggleStock uses optimistic UI update with backend rollback on error \u2014 pattern is consistent with rest of the app.",
+    "conveniencia.tsx:141-164 renders steppers only when outOfStock is false; disabled row also gets a distinct style (prodRowDisabled) \u2014 good affordance.",
+    "staff.tsx:112-127 emergency banner is conditional on openEmergencies>0 and placed above the list, tap uses Haptics.Heavy and navigates via router.push \u2014 pattern is correct.",
+    "admin-solicitacoes.tsx:65-73 visibleAuths uses local todayISO string (Y-M-D with zero padding) which matches the backend format \u2014 filter is safe across timezones because both sides compare strings.",
+    "admin.tsx:198,222 PDF quadro now includes Convenience column & daily total \u2014 verified button click yields no console error in the web preview."
+  ],
+  "updated_files": ["/app/backend/tests/test_marina_iteration91.py (new)"],
+  "success_rate": {"backend": "93% (13/14 pytest \u2014 1 legacy-seed contract failure)", "frontend": "100% (produtos stock toggle, conveniencia sem-estoque, staff banner, auth hoje/todas, PDF button all pass)"},
+  "seed_data_creation": "Created via API during tests: 1 test product (deleted at cleanup); 1 authorization TEST_iter91_hoje_UI for today (still active); 1 open emergency (TEST_iter91). Legacy: 1 pre-existing open emergency from earlier smoke test.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "New iter 9.1 endpoints/fields: PUT /api/products/{id} accepts in_stock:bool; POST /api/convenience/orders returns 400 with 'Sem estoque: <name>' when in_stock is false, and 400 'Produto indispon\u00edvel: <name>' when active is false. New testIDs: produto-stock-{id} (admin-produtos), product-nostock-{id} (conveniencia), staff-emergency-banner (staff), auth-scope-hoje / auth-scope-todas (admin-solicitacoes autorizac\u00f5es tab). Login inputs are testID cpf-input & phone-input (NOT login-cpf-input). Legacy seed products missing in_stock is a known contract gap \u2014 see backend_issues.minor for fix suggestion.",
+  "rca_of_issue": "Root cause of the single failing backend assertion: seed startup uses `db.products.update_one(filter, {'$setOnInsert': p}, upsert=True)`. This only sets fields when the document is first created. Since seed products existed from earlier iterations (before in_stock was added to the model), the new key never propagates onto them. Reproduction: fresh DB has all fields, but any DB carried over from iter<9.1 misses in_stock for the 6 seed rows. Mitigation: (a) migrate legacy rows on startup with `update_many({'in_stock': {'$exists': False}}, {'$set': {'in_stock': True}})`; or (b) use `$set` selectively for the new field in the seed loop."
+}

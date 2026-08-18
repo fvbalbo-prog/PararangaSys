@@ -10,14 +10,18 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  Image,
+  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import * as ImagePicker from 'expo-image-picker';
 import { colors, spacing, radius, typography } from '@/src/theme';
-import { api } from '@/src/api';
-import type { Product } from '@/src/api';
+import { api, fileUrl, PRODUCT_CATEGORIES } from '@/src/api';
+import type { Product, ProductCategory } from '@/src/api';
+import { categoryMeta } from '@/src/categories';
 
 const money = (v: number) => `R$ ${v.toFixed(2).replace('.', ',')}`;
 
@@ -27,8 +31,10 @@ export default function AdminProdutosScreen() {
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState('');
   const [price, setPrice] = useState('');
+  const [category, setCategory] = useState<ProductCategory>('Outros');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [uploadingId, setUploadingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -52,10 +58,11 @@ export default function AdminProdutosScreen() {
     }
     try {
       setSaving(true);
-      await api.createProduct({ name: name.trim(), price: priceNum });
+      await api.createProduct({ name: name.trim(), price: priceNum, category });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setName('');
       setPrice('');
+      setCategory('Outros');
       await load();
     } catch (e: any) {
       setError(e.message || 'Erro ao adicionar.');
@@ -64,10 +71,60 @@ export default function AdminProdutosScreen() {
     }
   };
 
+  const pickImage = async (p: Product) => {
+    Haptics.selectionAsync();
+    const perm = await ImagePicker.getMediaLibraryPermissionsAsync();
+    let status = perm.status;
+    if (status !== 'granted') {
+      if (perm.canAskAgain) {
+        const req = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        status = req.status;
+      }
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permissão necessária',
+          'Precisamos acessar suas fotos para escolher a imagem do produto.',
+          [
+            { text: 'Cancelar', style: 'cancel' },
+            { text: 'Abrir Ajustes', onPress: () => Linking.openSettings() },
+          ]
+        );
+        return;
+      }
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.6,
+      allowsEditing: true,
+      aspect: [1, 1],
+    });
+    if (result.canceled || !result.assets?.length) return;
+    const asset = result.assets[0];
+    const filename = asset.fileName || `produto-${Date.now()}.jpg`;
+    const type = asset.mimeType || 'image/jpeg';
+    try {
+      setUploadingId(p.id);
+      const updated = await api.uploadProductImage(p.id, asset.uri, filename, type);
+      setProducts((prev) => prev.map((x) => (x.id === p.id ? updated : x)));
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (e: any) {
+      Alert.alert('Erro', e.message || 'Falha ao enviar a foto.');
+    } finally {
+      setUploadingId(null);
+    }
+  };
+
   const toggleActive = async (p: Product) => {
     Haptics.selectionAsync();
     setProducts((prev) => prev.map((x) => (x.id === p.id ? { ...x, active: !x.active } : x)));
     try { await api.updateProduct(p.id, { active: !p.active }); } catch { load(); }
+  };
+
+  const toggleStock = async (p: Product) => {
+    Haptics.selectionAsync();
+    const next = p.in_stock === false;
+    setProducts((prev) => prev.map((x) => (x.id === p.id ? { ...x, in_stock: next } : x)));
+    try { await api.updateProduct(p.id, { in_stock: next }); } catch { load(); }
   };
 
   const remove = (p: Product) => {
@@ -119,6 +176,23 @@ export default function AdminProdutosScreen() {
             {saving ? <ActivityIndicator color="#FFFFFF" size="small" /> : <Ionicons name="add" size={24} color="#FFFFFF" />}
           </Pressable>
         </View>
+        <View style={styles.catRow}>
+          {PRODUCT_CATEGORIES.map((c) => {
+            const meta = categoryMeta(c);
+            const on = category === c;
+            return (
+              <Pressable
+                key={c}
+                testID={`produto-cat-${c}`}
+                onPress={() => { setCategory(c); Haptics.selectionAsync(); }}
+                style={[styles.catChip, on && { backgroundColor: meta.color, borderColor: meta.color }]}
+              >
+                <Ionicons name={meta.icon} size={14} color={on ? '#FFFFFF' : meta.color} />
+                <Text style={[styles.catChipText, on && { color: '#FFFFFF' }]}>{c}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
         {error ? <Text style={styles.errorText} testID="produtos-error">{error}</Text> : null}
 
         {loading ? (
@@ -129,20 +203,41 @@ export default function AdminProdutosScreen() {
             keyExtractor={(p) => p.id}
             contentContainerStyle={styles.list}
             ListEmptyComponent={<Text style={styles.empty}>Nenhum produto cadastrado.</Text>}
-            renderItem={({ item }) => (
-              <View style={styles.card} testID={`produto-${item.id}`}>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.prodName, !item.active && styles.inactive]}>{item.name}</Text>
-                  <Text style={styles.prodPrice}>{money(item.price)}</Text>
+            renderItem={({ item }) => {
+              const meta = categoryMeta(item.category);
+              const img = fileUrl(item.image_url);
+              return (
+                <View style={styles.card} testID={`produto-${item.id}`}>
+                  <Pressable testID={`produto-image-${item.id}`} onPress={() => pickImage(item)} style={styles.thumbWrap}>
+                    {uploadingId === item.id ? (
+                      <ActivityIndicator color={colors.brandPrimary} />
+                    ) : img ? (
+                      <Image source={{ uri: img }} style={styles.thumb} />
+                    ) : (
+                      <Ionicons name="camera-outline" size={22} color={colors.onSurfaceTertiary} />
+                    )}
+                  </Pressable>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.prodName, !item.active && styles.inactive]}>{item.name}</Text>
+                    <Text style={styles.prodPrice}>{money(item.price)}</Text>
+                    <View style={styles.catTag}>
+                      <Ionicons name={meta.icon} size={12} color={meta.color} />
+                      <Text style={[styles.catTagText, { color: meta.color }]}>{item.category}</Text>
+                    </View>
+                    {item.in_stock === false ? <Text style={styles.noStockTag}>Sem estoque</Text> : null}
+                  </View>
+                  <Pressable testID={`produto-stock-${item.id}`} onPress={() => toggleStock(item)} style={styles.iconBtn} hitSlop={8}>
+                    <Ionicons name={item.in_stock === false ? 'cube-outline' : 'cube'} size={22} color={item.in_stock === false ? colors.error : colors.brandPrimary} />
+                  </Pressable>
+                  <Pressable testID={`produto-toggle-${item.id}`} onPress={() => toggleActive(item)} style={styles.iconBtn} hitSlop={8}>
+                    <Ionicons name={item.active ? 'eye-outline' : 'eye-off-outline'} size={22} color={item.active ? colors.success : colors.onSurfaceTertiary} />
+                  </Pressable>
+                  <Pressable testID={`produto-remove-${item.id}`} onPress={() => remove(item)} style={styles.iconBtn} hitSlop={8}>
+                    <Ionicons name="trash-outline" size={22} color={colors.error} />
+                  </Pressable>
                 </View>
-                <Pressable testID={`produto-toggle-${item.id}`} onPress={() => toggleActive(item)} style={styles.iconBtn} hitSlop={8}>
-                  <Ionicons name={item.active ? 'eye-outline' : 'eye-off-outline'} size={22} color={item.active ? colors.success : colors.onSurfaceTertiary} />
-                </Pressable>
-                <Pressable testID={`produto-remove-${item.id}`} onPress={() => remove(item)} style={styles.iconBtn} hitSlop={8}>
-                  <Ionicons name="trash-outline" size={22} color={colors.error} />
-                </Pressable>
-              </View>
-            )}
+              );
+            }}
           />
         )}
       </KeyboardAvoidingView>
@@ -160,13 +255,21 @@ const styles = StyleSheet.create({
   addRow: { flexDirection: 'row', gap: spacing.sm, paddingHorizontal: spacing.lg, alignItems: 'center' },
   input: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.md, fontSize: typography.base, color: colors.onSurface, backgroundColor: colors.surfaceSecondary },
   addBtn: { width: 46, height: 46, borderRadius: radius.md, backgroundColor: colors.brandPrimary, alignItems: 'center', justifyContent: 'center' },
+  catRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, paddingHorizontal: spacing.lg, marginTop: spacing.md },
+  catChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
+  catChipText: { color: colors.onSurfaceSecondary, fontSize: typography.sm, fontWeight: '700' },
   errorText: { color: colors.error, fontSize: typography.sm, paddingHorizontal: spacing.lg, marginTop: spacing.sm },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   list: { padding: spacing.lg, paddingBottom: spacing.xxxl, gap: spacing.sm },
   empty: { color: colors.onSurfaceSecondary, fontSize: typography.base, textAlign: 'center', marginTop: spacing.xxl },
-  card: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.lg },
+  card: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.md },
+  thumbWrap: { width: 52, height: 52, borderRadius: radius.sm, backgroundColor: colors.surfaceTertiary, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  thumb: { width: 52, height: 52 },
   prodName: { color: colors.onSurface, fontSize: typography.lg, fontWeight: '700' },
   inactive: { color: colors.onSurfaceTertiary, textDecorationLine: 'line-through' },
   prodPrice: { color: colors.onSurfaceSecondary, fontSize: typography.base, marginTop: 2 },
+  catTag: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
+  catTagText: { fontSize: typography.sm, fontWeight: '700' },
+  noStockTag: { color: colors.error, fontSize: typography.sm, fontWeight: '700', marginTop: 2 },
   iconBtn: { padding: spacing.xs },
 });

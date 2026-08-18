@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -7,19 +7,25 @@ import {
   Pressable,
   ActivityIndicator,
   RefreshControl,
+  Vibration,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { useAudioPlayer } from 'expo-audio';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { api } from '@/src/api';
 import type { ConvenienceOrder, Authorization, Emergency } from '@/src/api';
+
+const alertSound = require('@/assets/sounds/alert.wav');
 
 type Tab = 'pedidos' | 'autorizacoes' | 'emergencias';
 const money = (v: number) => `R$ ${v.toFixed(2).replace('.', ',')}`;
 const fmt = (iso: string) =>
   new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+const fmtTime = (iso: string) =>
+  new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 const fmtDate = (iso: string) => {
   const [y, m, d] = iso.split('-');
   return `${d}/${m}/${y}`;
@@ -28,11 +34,23 @@ const fmtDate = (iso: string) => {
 export default function AdminSolicitacoesScreen() {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>('pedidos');
+  const [authScope, setAuthScope] = useState<'hoje' | 'todas'>('hoje');
   const [orders, setOrders] = useState<ConvenienceOrder[]>([]);
   const [auths, setAuths] = useState<Authorization[]>([]);
   const [emergencies, setEmergencies] = useState<Emergency[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const prevEmgRef = useRef<number | null>(null);
+  const player = useAudioPlayer(alertSound);
+
+  const alertNewEmergency = useCallback(() => {
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      Vibration.vibrate([0, 400, 200, 400, 200, 400]);
+      player.seekTo(0);
+      player.play();
+    } catch {}
+  }, [player]);
 
   const load = useCallback(async () => {
     try {
@@ -44,22 +62,47 @@ export default function AdminSolicitacoesScreen() {
       setOrders(o);
       setAuths(a);
       setEmergencies(e);
+      const count = e.filter((x) => x.status === 'aberta').length;
+      if (prevEmgRef.current !== null && count > prevEmgRef.current) alertNewEmergency();
+      prevEmgRef.current = count;
     } catch {
       // keep previous
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [alertNewEmergency]);
 
   useFocusEffect(
     useCallback(() => {
       setLoading(true);
       load();
+      const interval = setInterval(load, 15000);
+      return () => clearInterval(interval);
     }, [load])
   );
 
   const openEmergencies = emergencies.filter((e) => e.status === 'aberta').length;
+
+  const todayISO = (() => {
+    const d = new Date();
+    const p = (n: number) => n.toString().padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  })();
+  const visibleAuths =
+    authScope === 'hoje'
+      ? auths.filter((a) => a.status === 'ativa' && a.date === todayISO)
+      : auths;
+
+  // Caixa: totais de conveniência (pedidos não cancelados)
+  const now = new Date();
+  const weekAgo = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
+  const caixaHoje = orders
+    .filter((o) => o.status !== 'cancelada' && o.created_at.startsWith(todayISO))
+    .reduce((s, o) => s + o.total, 0);
+  const caixaSemana = orders
+    .filter((o) => o.status !== 'cancelada' && new Date(o.created_at) >= weekAgo)
+    .reduce((s, o) => s + o.total, 0);
 
   const setOrderStatus = async (id: string, status: 'entregue' | 'cancelada') => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -75,6 +118,12 @@ export default function AdminSolicitacoesScreen() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setEmergencies((prev) => prev.map((e) => (e.id === id ? { ...e, status: 'atendida' } : e)));
     try { await api.resolveEmergency(id); } catch { load(); }
+  };
+  const checkinAuth = async (id: string) => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    const nowIso = new Date().toISOString();
+    setAuths((prev) => prev.map((a) => (a.id === id ? { ...a, entered_at: nowIso } : a)));
+    try { await api.checkinAuthorization(id); } catch { load(); }
   };
 
   const TABS: { key: Tab; label: string; badge?: number }[] = [
@@ -126,6 +175,20 @@ export default function AdminSolicitacoesScreen() {
             keyExtractor={(o) => o.id}
             contentContainerStyle={styles.list}
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={colors.brandPrimary} />}
+            ListHeaderComponent={
+              <View style={styles.caixa} testID="caixa-summary">
+                <Ionicons name="cash-outline" size={22} color={colors.success} />
+                <View style={styles.caixaCol}>
+                  <Text style={styles.caixaLabel}>Hoje</Text>
+                  <Text style={styles.caixaValue} testID="caixa-hoje">{money(caixaHoje)}</Text>
+                </View>
+                <View style={styles.caixaDivider} />
+                <View style={styles.caixaCol}>
+                  <Text style={styles.caixaLabel}>Semana</Text>
+                  <Text style={styles.caixaValue} testID="caixa-semana">{money(caixaSemana)}</Text>
+                </View>
+              </View>
+            }
             ListEmptyComponent={<Text style={styles.empty}>Nenhum pedido.</Text>}
             renderItem={({ item }) => (
               <View style={styles.card} testID={`order-${item.id}`}>
@@ -157,11 +220,27 @@ export default function AdminSolicitacoesScreen() {
           />
         ) : tab === 'autorizacoes' ? (
           <FlatList
-            data={auths}
+            data={visibleAuths}
             keyExtractor={(a) => a.id}
             contentContainerStyle={styles.list}
+            ListHeaderComponent={
+              <View style={styles.scopeRow}>
+                {(['hoje', 'todas'] as const).map((s) => (
+                  <Pressable
+                    key={s}
+                    testID={`auth-scope-${s}`}
+                    onPress={() => { setAuthScope(s); Haptics.selectionAsync(); }}
+                    style={[styles.scopeBtn, authScope === s && styles.scopeBtnActive]}
+                  >
+                    <Text style={[styles.scopeText, authScope === s && styles.scopeTextActive]}>
+                      {s === 'hoje' ? 'Válidas hoje' : 'Todas'}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            }
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={colors.brandPrimary} />}
-            ListEmptyComponent={<Text style={styles.empty}>Nenhuma autorização.</Text>}
+            ListEmptyComponent={<Text style={styles.empty}>{authScope === 'hoje' ? 'Nenhuma autorização válida para hoje.' : 'Nenhuma autorização.'}</Text>}
             renderItem={({ item }) => (
               <View style={styles.card} testID={`auth-${item.id}`}>
                 <View style={styles.cardTop}>
@@ -169,11 +248,25 @@ export default function AdminSolicitacoesScreen() {
                   <Text style={styles.cardMeta}>{fmtDate(item.date)}</Text>
                 </View>
                 <Text style={styles.cardMeta}>Lancha: {item.boat_name} • Titular: {item.user_name}</Text>
+                {item.entered_at ? (
+                  <View style={styles.enteredTag}>
+                    <Ionicons name="log-in-outline" size={14} color={colors.success} />
+                    <Text style={styles.enteredText}>Entrou às {fmtTime(item.entered_at)}</Text>
+                  </View>
+                ) : null}
                 {item.status === 'ativa' ? (
-                  <Pressable testID={`auth-cancel-${item.id}`} onPress={() => cancelAuth(item.id)} style={[styles.actionBtn, { justifyContent: 'flex-start', paddingHorizontal: 0, marginTop: spacing.sm }]}>
-                    <Ionicons name="close-circle-outline" size={16} color={colors.error} />
-                    <Text style={[styles.actionText, { color: colors.error }]}>Cancelar autorização</Text>
-                  </Pressable>
+                  <View style={styles.actions}>
+                    {!item.entered_at ? (
+                      <Pressable testID={`auth-checkin-${item.id}`} onPress={() => checkinAuth(item.id)} style={[styles.actionBtn, { borderRightWidth: 1, borderRightColor: colors.border }]}>
+                        <Ionicons name="log-in-outline" size={16} color={colors.success} />
+                        <Text style={[styles.actionText, { color: colors.success }]}>Registrar entrada</Text>
+                      </Pressable>
+                    ) : null}
+                    <Pressable testID={`auth-cancel-${item.id}`} onPress={() => cancelAuth(item.id)} style={styles.actionBtn}>
+                      <Ionicons name="close-circle-outline" size={16} color={colors.error} />
+                      <Text style={[styles.actionText, { color: colors.error }]}>Cancelar</Text>
+                    </Pressable>
+                  </View>
                 ) : (
                   <View style={[styles.statusTag, { backgroundColor: colors.surfaceTertiary }]}>
                     <Text style={[styles.statusTagText, { color: colors.onSurfaceTertiary }]}>Cancelada</Text>
@@ -237,6 +330,18 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   list: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xxxl, gap: spacing.md },
   empty: { color: colors.onSurfaceSecondary, fontSize: typography.base, textAlign: 'center', marginTop: spacing.xxl },
+  caixa: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: '#ECFDF5', borderRadius: radius.md, borderWidth: 1, borderColor: '#A7F3D0', padding: spacing.lg, marginBottom: spacing.md },
+  caixaCol: { flex: 1 },
+  caixaLabel: { color: '#047857', fontSize: typography.sm, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
+  caixaValue: { color: '#065F46', fontSize: typography.xl, fontWeight: '800', marginTop: 2 },
+  caixaDivider: { width: 1, height: 32, backgroundColor: '#A7F3D0' },
+  enteredTag: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: spacing.sm },
+  enteredText: { color: colors.success, fontSize: typography.sm, fontWeight: '700' },
+  scopeRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
+  scopeBtn: { flex: 1, paddingVertical: spacing.sm, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border, alignItems: 'center', backgroundColor: colors.surface },
+  scopeBtnActive: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
+  scopeText: { color: colors.onSurfaceSecondary, fontSize: typography.sm, fontWeight: '700' },
+  scopeTextActive: { color: colors.onBrandPrimary },
   card: { backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.lg },
   cardAlert: { borderColor: colors.error, borderWidth: 1.5, backgroundColor: '#FEF2F2' },
   cardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.xs },

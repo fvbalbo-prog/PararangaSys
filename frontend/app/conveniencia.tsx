@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -16,8 +17,9 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { colors, spacing, radius, typography } from '@/src/theme';
-import { api, boatName } from '@/src/api';
+import { api, boatName, fileUrl, PRODUCT_CATEGORIES } from '@/src/api';
 import type { User, Product, ConvenienceOrder } from '@/src/api';
+import { categoryMeta } from '@/src/categories';
 
 const money = (v: number) => `R$ ${v.toFixed(2).replace('.', ',')}`;
 
@@ -136,23 +138,54 @@ export default function ConvenienciaScreen() {
             {products.length === 0 ? (
               <Text style={styles.empty}>Nenhum produto disponível no momento.</Text>
             ) : (
-              products.map((p) => {
-                const c = qty[p.id] || 0;
+              PRODUCT_CATEGORIES.filter((cat) => products.some((p) => (p.category || 'Outros') === cat)).map((cat) => {
+                const meta = categoryMeta(cat);
+                const catProducts = products.filter((p) => (p.category || 'Outros') === cat);
                 return (
-                  <View key={p.id} style={styles.prodRow} testID={`product-${p.id}`}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.prodName}>{p.name}</Text>
-                      <Text style={styles.prodPrice}>{money(p.price)}</Text>
+                  <View key={cat} style={styles.catGroup}>
+                    <View style={styles.catHeader}>
+                      <View style={[styles.catIcon, { backgroundColor: meta.color }]}>
+                        <Ionicons name={meta.icon} size={16} color="#FFFFFF" />
+                      </View>
+                      <Text style={styles.catTitle}>{cat}</Text>
                     </View>
-                    <View style={styles.stepper}>
-                      <Pressable testID={`product-minus-${p.id}`} onPress={() => step(p.id, -1)} style={styles.stepBtn} disabled={c === 0}>
-                        <Ionicons name="remove" size={18} color={c === 0 ? colors.onSurfaceTertiary : colors.brandPrimary} />
-                      </Pressable>
-                      <Text style={styles.qtyText} testID={`product-qty-${p.id}`}>{c}</Text>
-                      <Pressable testID={`product-plus-${p.id}`} onPress={() => step(p.id, 1)} style={styles.stepBtn}>
-                        <Ionicons name="add" size={18} color={colors.brandPrimary} />
-                      </Pressable>
-                    </View>
+                    {catProducts.map((p) => {
+                      const c = qty[p.id] || 0;
+                      const outOfStock = p.in_stock === false;
+                      const img = fileUrl(p.image_url);
+                      return (
+                        <View key={p.id} style={[styles.prodRow, outOfStock && styles.prodRowDisabled]} testID={`product-${p.id}`}>
+                          {img ? (
+                            <Image source={{ uri: img }} style={styles.prodThumb} />
+                          ) : (
+                            <View style={[styles.prodThumb, styles.prodThumbEmpty]}>
+                              <Ionicons name={meta.icon} size={20} color={meta.color} />
+                            </View>
+                          )}
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.prodName}>{p.name}</Text>
+                            {outOfStock ? (
+                              <Text style={styles.outOfStock} testID={`product-nostock-${p.id}`}>Sem estoque</Text>
+                            ) : (
+                              <Text style={styles.prodPrice}>{money(p.price)}</Text>
+                            )}
+                          </View>
+                          {outOfStock ? (
+                            <Ionicons name="close-circle-outline" size={22} color={colors.onSurfaceTertiary} />
+                          ) : (
+                            <View style={styles.stepper}>
+                              <Pressable testID={`product-minus-${p.id}`} onPress={() => step(p.id, -1)} style={styles.stepBtn} disabled={c === 0}>
+                                <Ionicons name="remove" size={18} color={c === 0 ? colors.onSurfaceTertiary : colors.brandPrimary} />
+                              </Pressable>
+                              <Text style={styles.qtyText} testID={`product-qty-${p.id}`}>{c}</Text>
+                              <Pressable testID={`product-plus-${p.id}`} onPress={() => step(p.id, 1)} style={styles.stepBtn}>
+                                <Ionicons name="add" size={18} color={colors.brandPrimary} />
+                              </Pressable>
+                            </View>
+                          )}
+                        </View>
+                      );
+                    })}
                   </View>
                 );
               })
@@ -222,9 +255,17 @@ const styles = StyleSheet.create({
   content: { padding: spacing.lg, paddingBottom: 160 },
   sectionLabel: { color: colors.brandPrimary, fontWeight: '700', fontSize: typography.sm, letterSpacing: 1, textTransform: 'uppercase', marginBottom: spacing.md },
   empty: { color: colors.onSurfaceSecondary, fontSize: typography.base },
-  prodRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.lg, marginBottom: spacing.sm },
+  catGroup: { marginBottom: spacing.md },
+  catHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm, marginTop: spacing.xs },
+  catIcon: { width: 28, height: 28, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center' },
+  catTitle: { color: colors.onSurface, fontSize: typography.lg, fontWeight: '800' },
+  prodThumb: { width: 44, height: 44, borderRadius: radius.sm },
+  prodThumbEmpty: { backgroundColor: colors.surfaceTertiary, alignItems: 'center', justifyContent: 'center' },
+  prodRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.lg, marginBottom: spacing.sm },
+  prodRowDisabled: { opacity: 0.6 },
   prodName: { color: colors.onSurface, fontSize: typography.lg, fontWeight: '700' },
   prodPrice: { color: colors.onSurfaceSecondary, fontSize: typography.base, marginTop: 2 },
+  outOfStock: { color: colors.error, fontSize: typography.sm, fontWeight: '700', marginTop: 2 },
   stepper: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   stepBtn: { width: 34, height: 34, borderRadius: radius.sm, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
   qtyText: { color: colors.onSurface, fontSize: typography.lg, fontWeight: '800', minWidth: 22, textAlign: 'center' },

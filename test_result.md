@@ -168,3 +168,11 @@
 ## agent_communication:
 ##     -agent: "main"
 ##     -message: "Iteração 9 implementada. Testar backend (produtos, pedidos, autorizações, emergências CRUD) e frontend (fluxos cliente das 3 telas; admin/staff Pedidos & Chamados; admin Produtos; PDF/busca do quadro). Credenciais: Admin 00000/0000, Staff 55555/0055, Cliente 11111/1111."
+
+## agent_communication (iteração 9.1):
+##     -agent: "main"
+##     -message: "Iteração 9.1: (1) PDF do quadro agora inclui coluna Conveniência (total de pedidos por lancha no dia) + linha de total do dia; (2) Banner de emergência no topo do painel do funcionário (staff.tsx) quando há emergência aberta, com contagem e navegação; (3) Estoque de produtos: campo in_stock (admin toggle em admin-produtos com ícone cube; cliente vê 'Sem estoque' e não consegue pedir; backend rejeita pedido de item sem estoque/inativo); (4) Autorizações: aba em admin-solicitacoes agora tem filtro 'Válidas hoje' (padrão) x 'Todas' mostrando só ativas com date==hoje. Testar backend (stock validation já validado via curl: rejeita sem estoque) e frontend flows."
+
+## agent_communication (iteração 9.2):
+##     -agent: "main"
+##     -message: "Iteração 9.2: (1) Resumo do Caixa - card no topo da aba Conveniência (admin-solicitacoes) com totais Hoje e Semana (testID caixa-hoje/caixa-semana); (2) Aviso Sonoro de Emergência - staff.tsx e admin-solicitacoes.tsx fazem polling a cada 15s e tocam som (expo-audio, assets/sounds/alert.wav) + vibração quando a contagem de emergências abertas AUMENTA; (3) Confirmar Autorização na Portaria - backend PATCH /authorizations/{id}/checkin seta entered_at; admin-solicitacoes mostra botão auth-checkin-{id} e exibe 'Entrou às HH:MM'; (4) Foto do Produto - Emergent Object Storage: POST /api/products/{id}/image (multipart) + GET /api/files/{path}; admin-produtos permite escolher foto (expo-image-picker, permissão tratada) e cliente vê thumbnail; (5) Categorias - Bebidas/Sorvetes/Açaí/Outros com ícones; produto tem campo category; conveniencia agrupa por categoria; admin-produtos tem chips de categoria (produto-cat-{cat}). Object storage upload+serve JA validado via curl (status 200, image/png). Credenciais: Admin 00000/0000, Staff 55555/0055, Cliente 11111 (CPF completo 11111111111)/1111."

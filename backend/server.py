@@ -1,4 +1,6 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File
+from fastapi.responses import Response
+from fastapi.concurrency import run_in_threadpool
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -6,6 +8,7 @@ import os
 import re
 import logging
 import httpx
+import requests
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
@@ -26,6 +29,59 @@ db = client[os.environ['DB_NAME']]
 TABUAMARE_API_KEY = os.environ.get("TABUAMARE_API_KEY", "").strip()
 TABUAMARE_BASE = "https://tabuamare.api.br/api/v2"
 TABUAMARE_HARBOR = "sp01"
+
+# ===================== Emergent Object Storage =====================
+STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
+STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
+EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
+APP_NAME = "marina-pararanga"
+_storage_key = None
+
+
+def init_storage():
+    global _storage_key
+    if _storage_key:
+        return _storage_key
+    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
+    resp.raise_for_status()
+    _storage_key = resp.json()["storage_key"]
+    return _storage_key
+
+
+def put_object(path: str, data: bytes, content_type: str) -> dict:
+    global _storage_key
+    key = init_storage()
+    resp = requests.put(
+        f"{STORAGE_URL}/objects/{path}",
+        headers={"X-Storage-Key": key, "Content-Type": content_type},
+        data=data,
+        timeout=120,
+    )
+    if resp.status_code == 503:
+        _storage_key = None
+        key = init_storage()
+        resp = requests.put(
+            f"{STORAGE_URL}/objects/{path}",
+            headers={"X-Storage-Key": key, "Content-Type": content_type},
+            data=data,
+            timeout=120,
+        )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_object(path: str):
+    global _storage_key
+    key = init_storage()
+    resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
+    if resp.status_code == 503:
+        _storage_key = None
+        key = init_storage()
+        resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
+    resp.raise_for_status()
+    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+
+
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -574,15 +630,21 @@ async def remove_boat(cpf: str, boat: str):
 
 
 # ===================== Conveniência (produtos + pedidos) =====================
+PRODUCT_CATEGORIES = ["Bebidas", "Sorvetes", "Açaí", "Outros"]
+
+
 class ProductInput(BaseModel):
     name: str
     price: float
+    category: Optional[str] = "Outros"
 
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = None
     price: Optional[float] = None
     active: Optional[bool] = None
+    in_stock: Optional[bool] = None
+    category: Optional[str] = None
 
 
 class OrderItem(BaseModel):
@@ -611,7 +673,16 @@ async def create_product(payload: ProductInput):
     name = payload.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Nome do produto é obrigatório.")
-    doc = {"id": str(uuid.uuid4()), "name": name, "price": float(payload.price), "active": True}
+    category = payload.category if payload.category in PRODUCT_CATEGORIES else "Outros"
+    doc = {
+        "id": str(uuid.uuid4()),
+        "name": name,
+        "price": float(payload.price),
+        "active": True,
+        "in_stock": True,
+        "category": category,
+        "image_url": None,
+    }
     await db.products.insert_one(doc)
     doc.pop("_id", None)
     return doc
@@ -624,12 +695,47 @@ async def update_product(pid: str, payload: ProductUpdate):
         update["name"] = update["name"].strip()
     if "price" in update:
         update["price"] = float(update["price"])
+    if "category" in update and update["category"] not in PRODUCT_CATEGORIES:
+        update["category"] = "Outros"
     if not update:
         raise HTTPException(status_code=400, detail="Nada para atualizar.")
     res = await db.products.update_one({"id": pid}, {"$set": update})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Produto não encontrado.")
     return await db.products.find_one({"id": pid}, {"_id": 0})
+
+
+@api_router.post("/products/{pid}/image")
+async def upload_product_image(pid: str, file: UploadFile = File(...)):
+    product = await db.products.find_one({"id": pid}, {"_id": 0})
+    if not product:
+        raise HTTPException(status_code=404, detail="Produto não encontrado.")
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Arquivo vazio.")
+    ext = "jpg"
+    if file.filename and "." in file.filename:
+        ext = file.filename.rsplit(".", 1)[-1].lower()[:5]
+    path = f"{APP_NAME}/uploads/products/{uuid.uuid4()}.{ext}"
+    content_type = file.content_type or "image/jpeg"
+    try:
+        await run_in_threadpool(put_object, path, content, content_type)
+    except Exception as e:
+        logger.error(f"Erro ao subir imagem: {e}")
+        raise HTTPException(status_code=502, detail="Falha ao enviar a imagem.")
+    image_url = f"/api/files/{path}"
+    await db.products.update_one({"id": pid}, {"$set": {"image_url": image_url, "storage_path": path}})
+    return await db.products.find_one({"id": pid}, {"_id": 0})
+
+
+@api_router.get("/files/{path:path}")
+async def serve_file(path: str):
+    try:
+        content, content_type = await run_in_threadpool(get_object, path)
+    except Exception as e:
+        logger.error(f"Erro ao buscar arquivo {path}: {e}")
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado.")
+    return Response(content=content, media_type=content_type, headers={"Cache-Control": "public, max-age=86400"})
 
 
 @api_router.delete("/products/{pid}")
@@ -649,6 +755,13 @@ async def create_order(payload: ConvenienceOrderInput):
     items = [i for i in payload.items if i.qty > 0]
     if not items:
         raise HTTPException(status_code=400, detail="Selecione ao menos um produto.")
+    # Validate products are available (active + in stock)
+    for it in items:
+        prod = await db.products.find_one({"id": it.product_id}, {"_id": 0})
+        if not prod or prod.get("active") is False:
+            raise HTTPException(status_code=400, detail=f"Produto indisponível: {it.name}.")
+        if prod.get("in_stock") is False:
+            raise HTTPException(status_code=400, detail=f"Sem estoque: {it.name}.")
     total = round(sum(i.price * i.qty for i in items), 2)
     now_iso = datetime.now(timezone.utc).isoformat()
     doc = {
@@ -712,6 +825,7 @@ async def create_authorization(payload: AuthorizationInput):
         "person_name": payload.person_name.strip(),
         "date": payload.date,
         "status": "ativa",
+        "entered_at": None,
         "created_at": now_iso,
         "updated_at": now_iso,
     }
@@ -731,6 +845,17 @@ async def list_authorizations(cpf: Optional[str] = None):
 async def cancel_authorization(aid: str):
     res = await db.authorizations.update_one(
         {"id": aid}, {"$set": {"status": "cancelada", "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Autorização não encontrada.")
+    return await db.authorizations.find_one({"id": aid}, {"_id": 0})
+
+
+@api_router.patch("/authorizations/{aid}/checkin")
+async def checkin_authorization(aid: str):
+    now_iso = datetime.now(timezone.utc).isoformat()
+    res = await db.authorizations.update_one(
+        {"id": aid}, {"$set": {"entered_at": now_iso, "updated_at": now_iso}}
     )
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Autorização não encontrada.")
@@ -794,12 +919,14 @@ async def resolve_emergency(eid: str):
 
 # ===================== Seed =====================
 SEED_PRODUCTS = [
-    {"id": "seed-gelo", "name": "Gelo (saco 5kg)", "price": 15.0, "active": True},
-    {"id": "seed-agua", "name": "Água mineral (fardo 12un)", "price": 24.0, "active": True},
-    {"id": "seed-refri", "name": "Refrigerante (lata)", "price": 6.0, "active": True},
-    {"id": "seed-cerveja", "name": "Cerveja (lata)", "price": 8.0, "active": True},
-    {"id": "seed-salgadinho", "name": "Salgadinho", "price": 12.0, "active": True},
-    {"id": "seed-protetor", "name": "Protetor solar", "price": 45.0, "active": True},
+    {"id": "seed-gelo", "name": "Gelo (saco 5kg)", "price": 15.0, "active": True, "in_stock": True, "category": "Outros", "image_url": None},
+    {"id": "seed-agua", "name": "Água mineral (fardo 12un)", "price": 24.0, "active": True, "in_stock": True, "category": "Bebidas", "image_url": None},
+    {"id": "seed-refri", "name": "Refrigerante (lata)", "price": 6.0, "active": True, "in_stock": True, "category": "Bebidas", "image_url": None},
+    {"id": "seed-cerveja", "name": "Cerveja (lata)", "price": 8.0, "active": True, "in_stock": True, "category": "Bebidas", "image_url": None},
+    {"id": "seed-salgadinho", "name": "Salgadinho", "price": 12.0, "active": True, "in_stock": True, "category": "Outros", "image_url": None},
+    {"id": "seed-protetor", "name": "Protetor solar", "price": 45.0, "active": True, "in_stock": True, "category": "Outros", "image_url": None},
+    {"id": "seed-picole", "name": "Picolé", "price": 7.0, "active": True, "in_stock": True, "category": "Sorvetes", "image_url": None},
+    {"id": "seed-acai", "name": "Açaí 300ml", "price": 18.0, "active": True, "in_stock": True, "category": "Açaí", "image_url": None},
 ]
 
 SEED_USERS = [
@@ -821,11 +948,21 @@ async def seed_users():
     for u in SEED_USERS:
         await db.users.update_one({"cpf": u["cpf"]}, {"$set": u}, upsert=True)
     for p in SEED_PRODUCTS:
+        on_insert = {k: v for k, v in p.items() if k != "category"}
         await db.products.update_one(
             {"id": p["id"]},
-            {"$setOnInsert": p},
+            {"$setOnInsert": on_insert, "$set": {"category": p["category"]}},
             upsert=True,
         )
+    # Backfill legacy products missing new fields
+    await db.products.update_many({"in_stock": {"$exists": False}}, {"$set": {"in_stock": True}})
+    await db.products.update_many({"category": {"$exists": False}}, {"$set": {"category": "Outros"}})
+    await db.products.update_many({"image_url": {"$exists": False}}, {"$set": {"image_url": None}})
+    # Init object storage (non-blocking)
+    try:
+        await run_in_threadpool(init_storage)
+    except Exception as e:
+        logger.warning(f"Storage init falhou (tentará no primeiro upload): {e}")
 
 
 # Include the router

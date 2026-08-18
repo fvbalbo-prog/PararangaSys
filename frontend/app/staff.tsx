@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -7,41 +7,68 @@ import {
   Pressable,
   ActivityIndicator,
   RefreshControl,
+  Vibration,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
+import { useAudioPlayer } from 'expo-audio';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { api } from '@/src/api';
 import type { MarinaRequest } from '@/src/api';
 import { StatusBadge } from '@/src/components/StatusBadge';
+
+const alertSound = require('@/assets/sounds/alert.wav');
 
 export default function StaffScreen() {
   const router = useRouter();
   const [items, setItems] = useState<MarinaRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [openEmergencies, setOpenEmergencies] = useState(0);
+  const prevEmgRef = useRef<number | null>(null);
+  const player = useAudioPlayer(alertSound);
+
+  const alertNewEmergency = useCallback(() => {
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      Vibration.vibrate([0, 400, 200, 400, 200, 400]);
+      player.seekTo(0);
+      player.play();
+    } catch {}
+  }, [player]);
 
   const load = useCallback(async () => {
     try {
       const raw = await AsyncStorage.getItem('user');
       if (!raw) return router.replace('/');
-      const data = await api.dayRequests();
+      const [data, emgs] = await Promise.all([
+        api.dayRequests(),
+        api.listEmergencies(undefined, 'aberta').catch(() => []),
+      ]);
       setItems(data);
+      const count = emgs.length;
+      setOpenEmergencies(count);
+      if (prevEmgRef.current !== null && count > prevEmgRef.current) {
+        alertNewEmergency();
+      }
+      prevEmgRef.current = count;
     } catch {
       setItems([]);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [router]);
+  }, [router, alertNewEmergency]);
 
   useFocusEffect(
     useCallback(() => {
       setLoading(true);
       load();
+      const interval = setInterval(load, 15000);
+      return () => clearInterval(interval);
     }, [load])
   );
 
@@ -104,6 +131,22 @@ export default function StaffScreen() {
       </View>
 
       <View style={styles.sheet}>
+        {openEmergencies > 0 ? (
+          <Pressable
+            testID="staff-emergency-banner"
+            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy); router.push('/admin-solicitacoes'); }}
+            style={({ pressed }) => [styles.emgBanner, pressed && { opacity: 0.9 }]}
+          >
+            <Ionicons name="alert-circle" size={24} color="#FFFFFF" />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.emgTitle}>
+                {openEmergencies === 1 ? '1 emergência aberta!' : `${openEmergencies} emergências abertas!`}
+              </Text>
+              <Text style={styles.emgSub}>Toque para atender agora</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#FFFFFF" />
+          </Pressable>
+        ) : null}
         {loading ? (
           <View style={styles.center}><ActivityIndicator color={colors.brandPrimary} /></View>
         ) : sorted.length === 0 ? (
@@ -175,6 +218,9 @@ const styles = StyleSheet.create({
   title: { color: colors.onBrandPrimary, fontSize: 24, fontWeight: '800', marginTop: 4 },
   logoutBtn: { padding: spacing.sm, borderRadius: radius.pill, backgroundColor: 'rgba(255,255,255,0.08)' },
   sheet: { flex: 1, backgroundColor: colors.surface, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingTop: spacing.lg },
+  emgBanner: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: colors.error, marginHorizontal: spacing.lg, marginBottom: spacing.md, padding: spacing.lg, borderRadius: radius.md },
+  emgTitle: { color: '#FFFFFF', fontSize: typography.lg, fontWeight: '800' },
+  emgSub: { color: '#FFFFFF', opacity: 0.9, fontSize: typography.sm, marginTop: 2 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl },
   emptyIcon: { width: 88, height: 88, borderRadius: 44, backgroundColor: colors.brandTertiary, alignItems: 'center', justifyContent: 'center', marginBottom: spacing.lg },
   emptyTitle: { color: colors.onSurface, fontSize: typography.xl, fontWeight: '700' },

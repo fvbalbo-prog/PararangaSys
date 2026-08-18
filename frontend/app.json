@@ -10,7 +10,10 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.emergent.lanchascheduler.x60lx1"
+      "bundleIdentifier": "com.emergent.lanchascheduler.x60lx1",
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "Escolher a foto do produto de conveniência"
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -36,7 +39,14 @@
           "backgroundColor": "#000000"
         }
       ],
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      "expo-audio",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Escolher a foto do produto de conveniência"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

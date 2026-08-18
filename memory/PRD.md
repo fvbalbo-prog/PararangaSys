@@ -72,6 +72,17 @@ Aplicativo mobile (React Native/Expo) para os proprietários de lanchas da Marin
 ## Backlog (solicitado, ainda pendente)
 - (nenhum pendente)
 
+## Features adicionadas (2026-06 - iteração 9.2)
+- **Resumo do Caixa**: card no topo da aba Conveniência (admin/staff) com totais de conveniência Hoje e Semana (pedidos não cancelados).
+- **Aviso Sonoro de Emergência**: painel do funcionário e Pedidos & Chamados fazem polling (15s) e tocam alerta (expo-audio, `assets/sounds/alert.wav`) + vibração quando surge nova emergência aberta.
+- **Confirmar Autorização na Portaria**: `PATCH /authorizations/{id}/checkin` grava `entered_at`; equipe registra a entrada e vê "Entrou às HH:MM".
+- **Foto do Produto**: upload via Emergent Object Storage (`POST /api/products/{id}/image`, servido em `GET /api/files/{path}`); admin escolhe foto (expo-image-picker), cliente vê miniatura.
+- **Categorias de Conveniência**: Bebidas, Sorvetes, Açaí, Outros (com ícones); produto tem campo `category`; loja do cliente agrupa por categoria.
+
+## Features adicionadas (2026-06 - iteração 9.1)
+- **Coluna Conveniência no PDF do Quadro** (total por lancha no dia) + total do dia; **Aviso de Emergência** no topo do painel do funcionário; **Estoque de Produtos** (`in_stock`); **Autorizações válidas hoje** (filtro padrão).
+
+
 ## Features adicionadas (2026-06 - iteração 9)
 - **Exportar Quadro em PDF** (Painel da Marina): botão de impressão gera o quadro do dia (Lancha / Descida / Subida / Maré) em PDF via expo-print + expo-sharing, com destaque de lanchas atrasadas.
 - **Busca por lancha** no Painel da Marina: filtra Movimentação e Quadro pelo nome da lancha.

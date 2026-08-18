@@ -99,11 +99,28 @@ export const api = {
     req<Client>(`/users/${cpf}/boats?boat=${encodeURIComponent(boat)}`, { method: 'DELETE' }),
   // Conveniência
   listProducts: (all = false) => req<Product[]>(`/products${all ? '?all=true' : ''}`),
-  createProduct: (data: { name: string; price: number }) =>
+  createProduct: (data: { name: string; price: number; category?: string }) =>
     req<Product>('/products', { method: 'POST', body: JSON.stringify(data) }),
   updateProduct: (id: string, data: Partial<Product>) =>
     req<Product>(`/products/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteProduct: (id: string) => req<{ ok: boolean }>(`/products/${id}`, { method: 'DELETE' }),
+  uploadProductImage: async (id: string, uri: string, filename: string, type: string) => {
+    const form = new FormData();
+    if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+      // web: needs a real Blob
+      const blob = await (await fetch(uri)).blob();
+      form.append('file', blob, filename);
+    } else {
+      form.append('file', { uri, name: filename, type } as any);
+    }
+    const res = await fetch(`${BASE}/api/products/${id}/image`, { method: 'POST', body: form });
+    if (!res.ok) {
+      let msg = 'Falha no upload';
+      try { msg = (await res.json()).detail || msg; } catch {}
+      throw new Error(msg);
+    }
+    return res.json() as Promise<Product>;
+  },
   createOrder: (data: {
     cpf: string;
     boat_name?: string | null;
@@ -120,6 +137,8 @@ export const api = {
     req<Authorization[]>(`/authorizations${cpf ? `?cpf=${cpf}` : ''}`),
   cancelAuthorization: (id: string) =>
     req<Authorization>(`/authorizations/${id}/cancel`, { method: 'PATCH' }),
+  checkinAuthorization: (id: string) =>
+    req<Authorization>(`/authorizations/${id}/checkin`, { method: 'PATCH' }),
   // Emergências
   createEmergency: (data: { cpf: string; boat_name?: string | null; location?: string | null; observation?: string | null }) =>
     req<Emergency>('/emergencies', { method: 'POST', body: JSON.stringify(data) }),
@@ -134,7 +153,16 @@ export const api = {
     req<Emergency>(`/emergencies/${id}/resolve`, { method: 'PATCH' }),
 };
 
-export type Product = { id: string; name: string; price: number; active: boolean };
+export type Product = { id: string; name: string; price: number; active: boolean; in_stock: boolean; category: string; image_url?: string | null };
+export const PRODUCT_CATEGORIES = ['Bebidas', 'Sorvetes', 'Açaí', 'Outros'] as const;
+export type ProductCategory = (typeof PRODUCT_CATEGORIES)[number];
+export const API_BASE = BASE;
+export function fileUrl(path?: string | null): string | undefined {
+  if (!path) return undefined;
+  if (path.startsWith('http')) return path;
+  // stored as "/api/files/..."; BASE already includes host without /api
+  return `${BASE}${path}`;
+}
 export type OrderStatus = 'pendente' | 'entregue' | 'cancelada';
 export type ConvenienceOrder = {
   id: string;
@@ -156,6 +184,7 @@ export type Authorization = {
   person_name: string;
   date: string;
   status: 'ativa' | 'cancelada';
+  entered_at?: string | null;
   created_at: string;
 };
 export type Emergency = {
