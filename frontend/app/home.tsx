@@ -155,6 +155,24 @@ export default function HomeScreen() {
             );
           })}
         </View>
+
+        <Pressable
+          testID="card-historico"
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            router.push('/historico');
+          }}
+          style={({ pressed }) => [styles.historyRow, pressed && { opacity: 0.9 }]}
+        >
+          <View style={styles.historyIcon}>
+            <Ionicons name="albums-outline" size={22} color={colors.brandPrimary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.historyTitle}>Histórico</Text>
+            <Text style={styles.historySubtitle}>Ver todas as suas solicitações</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={colors.onSurfaceTertiary} />
+        </Pressable>
       </ScrollView>
     </SafeAreaView>
   );
@@ -244,4 +262,25 @@ const styles = StyleSheet.create({
     right: spacing.md,
     bottom: spacing.md,
   },
+  historyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    marginTop: spacing.lg,
+    backgroundColor: colors.surfaceSecondary,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  historyIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.md,
+    backgroundColor: colors.brandTertiary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  historyTitle: { color: colors.onSurface, fontSize: typography.lg, fontWeight: '700' },
+  historySubtitle: { color: colors.onSurfaceSecondary, fontSize: typography.sm, marginTop: 2 },
 });

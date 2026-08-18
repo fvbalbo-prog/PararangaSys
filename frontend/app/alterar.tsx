@@ -15,6 +15,7 @@ import * as Haptics from 'expo-haptics';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { api } from '@/src/api';
 import type { MarinaRequest, RequestType } from '@/src/api';
+import { StatusBadge } from '@/src/components/StatusBadge';
 
 export default function AlterarScreen() {
   const router = useRouter();
@@ -55,6 +56,27 @@ export default function AlterarScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const path = item.type === 'descida' ? '/descida' : '/subida';
     router.push({ pathname: path, params: { id: item.id } } as any);
+  };
+
+  const doCancel = async (id: string) => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    setItems((prev) => prev.map((r) => (r.id === id ? { ...r, status: 'cancelada' } : r)));
+    try {
+      await api.cancelRequest(id);
+    } catch {
+      load();
+    }
+  };
+
+  const doConfirm = async (id: string) => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    const now = new Date().toISOString();
+    setItems((prev) => prev.map((r) => (r.id === id ? { ...r, status: 'concluida', returned_at: now } : r)));
+    try {
+      await api.confirmReturn(id);
+    } catch {
+      load();
+    }
   };
 
   const title = type === 'descida' ? 'Alterar Descida' : 'Alterar Subida';
@@ -101,38 +123,74 @@ export default function AlterarScreen() {
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.list}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.brandPrimary} />}
-          renderItem={({ item }) => (
-            <Pressable
-              testID={`request-row-${item.id}`}
-              style={({ pressed }) => [styles.row, pressed && { opacity: 0.9 }]}
-              onPress={() => goEdit(item)}
-            >
-              <View style={styles.timeBlock}>
-                <Text style={styles.timeText}>{item.time}</Text>
-                <Text style={styles.timeLabel}>{item.type === 'descida' ? 'DESCIDA' : 'SUBIDA'}</Text>
-              </View>
-              <View style={styles.rowBody}>
-                <Text style={styles.rowTitle} numberOfLines={1}>
-                  {item.user_name || 'Solicitante'} • {item.boat_name || ''}
-                </Text>
-                {item.type === 'descida' ? (
-                  <View style={{ marginTop: 2 }}>
-                    <Text style={styles.rowMeta} numberOfLines={1}>
-                      <Ionicons name="location-outline" size={12} color={colors.onSurfaceSecondary} />{' '}
-                      {item.destination || '—'}
-                    </Text>
-                    <Text style={styles.rowMeta}>
-                      <Ionicons name="people-outline" size={12} color={colors.onSurfaceSecondary} />{' '}
-                      {item.passengers} passageiros • Ret. {item.expected_return_time}
-                    </Text>
+          renderItem={({ item }) => {
+            const isActive = item.status === 'agendada';
+            return (
+              <View style={styles.card} testID={`request-row-${item.id}`}>
+                <Pressable
+                  style={({ pressed }) => [styles.row, pressed && isActive && { opacity: 0.9 }]}
+                  onPress={() => isActive && goEdit(item)}
+                  disabled={!isActive}
+                >
+                  <View style={[styles.timeBlock, !isActive && { backgroundColor: colors.onSurfaceTertiary }]}>
+                    <Text style={styles.timeText}>{item.time}</Text>
+                    <Text style={styles.timeLabel}>{item.type === 'descida' ? 'DESCIDA' : 'SUBIDA'}</Text>
                   </View>
-                ) : (
-                  <Text style={styles.rowMeta}>Retorno agendado</Text>
+                  <View style={styles.rowBody}>
+                    <View style={styles.rowTop}>
+                      <Text style={styles.rowTitle} numberOfLines={1}>
+                        {item.user_name || 'Solicitante'} • {item.boat_name || ''}
+                      </Text>
+                    </View>
+                    {item.type === 'descida' ? (
+                      <View style={{ marginTop: 2 }}>
+                        <Text style={styles.rowMeta} numberOfLines={1}>
+                          <Ionicons name="location-outline" size={12} color={colors.onSurfaceSecondary} />{' '}
+                          {item.destination || '—'}
+                        </Text>
+                        <Text style={styles.rowMeta}>
+                          <Ionicons name="people-outline" size={12} color={colors.onSurfaceSecondary} />{' '}
+                          {item.passengers} passageiros • Ret. {item.expected_return_time}
+                        </Text>
+                      </View>
+                    ) : (
+                      <Text style={styles.rowMeta}>Retorno agendado</Text>
+                    )}
+                    <View style={{ marginTop: spacing.sm }}>
+                      <StatusBadge status={item.status} />
+                    </View>
+                  </View>
+                  {isActive && <Ionicons name="chevron-forward" size={20} color={colors.onSurfaceTertiary} />}
+                </Pressable>
+
+                {isActive && (
+                  <View style={styles.actions}>
+                    <Pressable
+                      testID={`confirm-return-${item.id}`}
+                      style={({ pressed }) => [styles.actionBtn, styles.confirmBtn, pressed && { opacity: 0.85 }]}
+                      onPress={() => doConfirm(item.id)}
+                    >
+                      <Ionicons name="checkmark-circle-outline" size={16} color={colors.success} />
+                      <Text style={[styles.actionText, { color: colors.success }]}>Confirmar retorno</Text>
+                    </Pressable>
+                    <Pressable
+                      testID={`cancel-request-${item.id}`}
+                      style={({ pressed }) => [styles.actionBtn, styles.cancelBtn, pressed && { opacity: 0.85 }]}
+                      onPress={() => doCancel(item.id)}
+                    >
+                      <Ionicons name="close-circle-outline" size={16} color={colors.error} />
+                      <Text style={[styles.actionText, { color: colors.error }]}>Cancelar</Text>
+                    </Pressable>
+                  </View>
+                )}
+                {item.status === 'concluida' && item.returned_at && (
+                  <Text style={styles.returnedText}>
+                    Retorno confirmado às {new Date(item.returned_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                  </Text>
                 )}
               </View>
-              <Ionicons name="chevron-forward" size={20} color={colors.onSurfaceTertiary} />
-            </Pressable>
-          )}
+            );
+          }}
         />
       )}
     </SafeAreaView>
@@ -177,15 +235,42 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   list: { padding: spacing.lg, paddingBottom: spacing.xxxl, gap: spacing.md },
+  card: {
+    backgroundColor: colors.surfaceSecondary,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    overflow: 'hidden',
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.surfaceSecondary,
-    borderRadius: radius.md,
     padding: spacing.md,
     gap: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.border,
+  },
+  rowTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  actions: {
+    flexDirection: 'row',
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  actionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    paddingVertical: spacing.md,
+  },
+  confirmBtn: { borderRightWidth: 1, borderRightColor: colors.border },
+  cancelBtn: {},
+  actionText: { fontSize: typography.base, fontWeight: '700' },
+  returnedText: {
+    color: colors.success,
+    fontSize: typography.sm,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.md,
+    fontWeight: '600',
   },
   timeBlock: {
     backgroundColor: colors.brandPrimary,

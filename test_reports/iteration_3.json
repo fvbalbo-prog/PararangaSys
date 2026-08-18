@@ -1,0 +1,44 @@
+{
+  "summary": "Verified 4 new features (Admin panel, Histórico, Cancelar, Confirmar Retorno) end-to-end. Backend: 25/25 pytest tests pass — admin login (is_admin=true), regular login (is_admin=false), history endpoint, day endpoint (default today + specific date + type filter), PATCH cancel (sets status=cancelada, 404 when missing), PATCH confirm-return (sets status=concluida + returned_at, 404 when missing), plus full regression on login/create/update/today. Frontend: Admin login (00000000000) correctly redirects to /admin; Painel da Marina displays stats (Descidas/Subidas/Retornos), date-nav (prev/next day both change the date label), and lists 16 rows for today. Regular login (11111111111) goes to /home with the new 'Histórico' row visible below the 4 cards; tapping it opens /historico showing 10 history rows with type/date/time/status badges (Agendada, Cancelada, Retornou). Alterar Descida lists 11 rows; Cancelar and Confirmar Retorno buttons on active (status=agendada) rows both work — Cancelar hides the action row and shows 'Cancelada' badge; Confirmar Retorno hides the action row, shows 'Retornou' badge, and displays 'Retorno confirmado às HH:MM' text. Admin stats update correctly (Retornos count went 3→2 after cancel-vs-confirm actions during the run). ONE HIGH-PRIORITY BUG FOUND: admin filter chips (Todas/Descidas/Subidas) do NOT filter the list — clicking filter-descida or filter-subida does not change the active chip styling nor the FlatList content; all three filters render the same 16 rows (11 Descidas + 5 Subidas). Root cause is likely the horizontal ScrollView wrapping the chips intercepting Pressable onPress on react-native-web.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "AdminScreen filter chips",
+        "issue": "Tapping filter-descida / filter-subida / filter-todas does not update the active chip nor filter the FlatList. Verified via computed style: after clicking filter-descida, filter-todas keeps brandPrimary bg (rgb(11,37,69)) and filter-descida stays with surfaceSecondary bg — setFilter is not being invoked (or Haptics.selectionAsync error swallows it) because the horizontal ScrollView on web intercepts the Pressable onPress. Reference: /app/frontend/app/admin.tsx:127-150.",
+        "testID": "filter-descida",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_marina_api.py",
+    "/app/backend/tests/test_marina_new_features.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix admin filter chips: on react-native-web the horizontal ScrollView captures the click so Pressable.onPress never fires. Either (a) replace the outer ScrollView with a plain View (chips fit on 375px viewport, no scroll needed), or (b) add `onStartShouldSetResponderCapture={() => false}` on the ScrollView, or (c) move the Haptics.selectionAsync() call after setFilter or wrap it in try/catch to make sure setFilter runs even if Haptics fails. File: /app/frontend/app/admin.tsx:127-150."
+  ],
+  "critical_code_review_comments": [
+    "admin.tsx uses horizontal ScrollView for 3 filter chips — this is the likely cause of the pointer-capture issue on web. On a 375px viewport the three chips (Todas/Descidas/Subidas) fit horizontally without scrolling, so a plain View row would be sufficient and avoid the react-native-web bug.",
+    "alterar.tsx doCancel / doConfirm optimistically update UI then call the API — correct pattern; falls back to reload on error. Nicely done.",
+    "Backend cancel_request/confirm_return endpoints properly use PATCH and return the updated document with _id excluded.",
+    "history endpoint sorts by (date DESC, time DESC) — good default for user-facing history view.",
+    "admin.tsx correctly computes stats excluding cancelled requests for Descidas/Subidas but counts only status='concluida' for Retornos — matches spec."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_marina_new_features.py (new)"
+  ],
+  "success_rate": {
+    "backend": "100% (25/25 pytest)",
+    "frontend": "~90% (10/11 features verified — filter chips broken)"
+  },
+  "seed_data_creation": "Backend tests + UI actions produced multiple descida/subida requests for today (2026-08-18) across CPFs 11111111111, 22222222222, 33333333333, some cancelled via UI cancel button, some confirmed via UI confirm-return button. Test data prefixed with TEST_ where applicable.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Filter chip bug is only reproducible on web via react-native-web ScrollView intercept. Verify fix by: login as 00000000000 → click filter-descida → assert rows only contain 'DESCIDA' label AND filter-descida element background is rgb(11,37,69). Test data setup: run pytest backend/tests/ to seed today's requests. Home card testIDs: card-solicitar-descida, card-solicitar-subida, card-alterar-descida, card-alterar-subida, card-historico. Alterar row action testIDs: cancel-request-{id}, confirm-return-{id}. Admin: filter-{todas|descida|subida}, prev-day, next-day, admin-date-label, admin-logout.",
+  "rca_of_issue": "Filter chips not filtering. RCA: In /app/frontend/app/admin.tsx lines 128-150, the FILTERS are rendered inside a horizontal ScrollView (chipScroller). On react-native-web the ScrollView installs pointer-event handlers that capture click events before they reach child Pressable elements, so the onPress callback (which calls setFilter) never fires. Reproduction: (1) login as admin 00000000000, (2) tap 'Descidas' or 'Subidas' chip, (3) observe list does not filter and chip does not become active. Mitigation options: replace ScrollView with plain View (chips fit within 375px viewport), or add pointer-event pass-through prop, or delegate onPress via a simple TouchableOpacity outside the ScrollView. Also consider wrapping Haptics.selectionAsync() in try/catch since react-native-web does not implement it and any throw would abort the handler."
+}

@@ -50,6 +50,7 @@ class User(BaseModel):
     name: str
     phone: str
     boat_name: str
+    is_admin: bool = False
 
 
 class LoginInput(BaseModel):
@@ -71,6 +72,9 @@ class RequestBase(BaseModel):
     passengers: Optional[int] = None
     responsible: Optional[str] = None
     observation: Optional[str] = None
+    # Status: "agendada" | "cancelada" | "concluida"
+    status: str = "agendada"
+    returned_at: Optional[str] = None
 
 
 class RequestCreate(RequestBase):
@@ -191,6 +195,29 @@ async def get_today_requests(type: Optional[str] = None, cpf: Optional[str] = No
     return docs
 
 
+@api_router.get("/requests/history", response_model=List[RequestOut])
+async def get_history(cpf: str):
+    """All requests of a given user, most recent first."""
+    query = {"cpf": normalize_cpf(cpf)}
+    docs = (
+        await db.requests.find(query, {"_id": 0})
+        .sort([("date", -1), ("time", -1)])
+        .to_list(1000)
+    )
+    return docs
+
+
+@api_router.get("/requests/day", response_model=List[RequestOut])
+async def get_day_requests(date: Optional[str] = None, type: Optional[str] = None):
+    """All requests for a specific day (admin panel). Defaults to today."""
+    day = date or datetime.now().strftime("%Y-%m-%d")
+    query = {"date": day}
+    if type in ("descida", "subida"):
+        query["type"] = type
+    docs = await db.requests.find(query, {"_id": 0}).sort("time", 1).to_list(1000)
+    return docs
+
+
 @api_router.get("/requests/{request_id}", response_model=RequestOut)
 async def get_request(request_id: str):
     doc = await db.requests.find_one({"id": request_id}, {"_id": 0})
@@ -215,6 +242,31 @@ async def update_request(request_id: str, payload: RequestUpdate):
     return doc
 
 
+@api_router.patch("/requests/{request_id}/cancel", response_model=RequestOut)
+async def cancel_request(request_id: str):
+    existing = await db.requests.find_one({"id": request_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Solicitação não encontrada.")
+    await db.requests.update_one(
+        {"id": request_id},
+        {"$set": {"status": "cancelada", "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return await db.requests.find_one({"id": request_id}, {"_id": 0})
+
+
+@api_router.patch("/requests/{request_id}/confirm-return", response_model=RequestOut)
+async def confirm_return(request_id: str):
+    existing = await db.requests.find_one({"id": request_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Solicitação não encontrada.")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.requests.update_one(
+        {"id": request_id},
+        {"$set": {"status": "concluida", "returned_at": now_iso, "updated_at": now_iso}},
+    )
+    return await db.requests.find_one({"id": request_id}, {"_id": 0})
+
+
 @api_router.delete("/requests/{request_id}")
 async def delete_request(request_id: str):
     res = await db.requests.delete_one({"id": request_id})
@@ -225,9 +277,10 @@ async def delete_request(request_id: str):
 
 # ===================== Seed =====================
 SEED_USERS = [
-    {"cpf": "11111111111", "name": "João Silva", "phone": "(48) 99999-1111", "boat_name": "Netuno"},
-    {"cpf": "22222222222", "name": "Maria Santos", "phone": "(48) 99999-2222", "boat_name": "Poseidon"},
-    {"cpf": "33333333333", "name": "Carlos Oliveira", "phone": "(48) 99999-3333", "boat_name": "Aurora"},
+    {"cpf": "11111111111", "name": "João Silva", "phone": "(48) 99999-1111", "boat_name": "Netuno", "is_admin": False},
+    {"cpf": "22222222222", "name": "Maria Santos", "phone": "(48) 99999-2222", "boat_name": "Poseidon", "is_admin": False},
+    {"cpf": "33333333333", "name": "Carlos Oliveira", "phone": "(48) 99999-3333", "boat_name": "Aurora", "is_admin": False},
+    {"cpf": "00000000000", "name": "Administração Marina", "phone": "(48) 3000-0000", "boat_name": "Marina Pararanga", "is_admin": True},
 ]
 
 

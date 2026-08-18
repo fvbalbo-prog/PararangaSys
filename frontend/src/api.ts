@@ -5,9 +5,11 @@ export type User = {
   name: string;
   phone: string;
   boat_name: string;
+  is_admin?: boolean;
 };
 
 export type RequestType = 'descida' | 'subida';
+export type RequestStatus = 'agendada' | 'cancelada' | 'concluida';
 
 export type MarinaRequest = {
   id: string;
@@ -21,6 +23,8 @@ export type MarinaRequest = {
   passengers?: number | null;
   responsible?: string | null;
   observation?: string | null;
+  status: RequestStatus;
+  returned_at?: string | null;
   user_name?: string;
   boat_name?: string;
   created_at: string;
@@ -54,5 +58,17 @@ export const api = {
     req<MarinaRequest>(`/requests/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   todayRequests: (type?: RequestType) =>
     req<MarinaRequest[]>(`/requests/today${type ? `?type=${type}` : ''}`),
+  history: (cpf: string) => req<MarinaRequest[]>(`/requests/history?cpf=${cpf}`),
+  dayRequests: (date?: string, type?: RequestType) => {
+    const params = new URLSearchParams();
+    if (date) params.set('date', date);
+    if (type) params.set('type', type);
+    const qs = params.toString();
+    return req<MarinaRequest[]>(`/requests/day${qs ? `?${qs}` : ''}`);
+  },
+  cancelRequest: (id: string) =>
+    req<MarinaRequest>(`/requests/${id}/cancel`, { method: 'PATCH' }),
+  confirmReturn: (id: string) =>
+    req<MarinaRequest>(`/requests/${id}/confirm-return`, { method: 'PATCH' }),
   getRequest: (id: string) => req<MarinaRequest>(`/requests/${id}`),
 };
