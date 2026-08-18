@@ -20,6 +20,7 @@ import { DateField, DateHelpers } from '@/src/components/DateField';
 import { SelectField } from '@/src/components/SelectField';
 import { TimeSlotField } from '@/src/components/TimeSlotField';
 import { TideChip } from '@/src/components/TideChip';
+import { TideSafetyBanner } from '@/src/components/TideSafetyBanner';
 import { tideHeightAt, type TidePoint } from '@/src/tide';
 import { api, boatName } from '@/src/api';
 import type { User } from '@/src/api';
@@ -102,6 +103,10 @@ export default function DescidaScreen() {
   }, [editId, router]);
 
   const boatOptions = user?.boats && user.boats.length ? user.boats.map(boatName) : user ? [user.boat_name] : [];
+  const selectedBoatLength = (() => {
+    const b = user?.boats?.find((x) => typeof x !== 'string' && x.name === boat);
+    return b && typeof b !== 'string' ? b.length : null;
+  })();
 
   const handleSubmit = async () => {
     setError(null);
@@ -205,6 +210,14 @@ export default function DescidaScreen() {
                 />
               </View>
             </View>
+
+            <TideSafetyBanner
+              testID="descida-tide-safety"
+              points={tidePoints}
+              type="descida"
+              time={bookingTime}
+              boatLength={selectedBoatLength}
+            />
 
             <Text style={styles.sectionLabel}>Previsão de retorno</Text>
             <View style={styles.row}>

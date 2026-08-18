@@ -39,7 +39,7 @@ export default function LoginScreen() {
       const user = await api.login(digits);
       await AsyncStorage.setItem('user', JSON.stringify(user));
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      router.replace(user.is_admin ? '/admin' : '/home');
+      router.replace(user.is_admin ? '/admin' : user.is_staff ? '/staff' : '/home');
     } catch (e: any) {
       setError(e.message || 'CPF não cadastrado.');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);

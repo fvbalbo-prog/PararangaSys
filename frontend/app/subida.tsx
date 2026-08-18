@@ -19,6 +19,7 @@ import { colors, spacing, radius, typography } from '@/src/theme';
 import { DateField, DateHelpers } from '@/src/components/DateField';
 import { SelectField } from '@/src/components/SelectField';
 import { TimeSlotField } from '@/src/components/TimeSlotField';
+import { TideSafetyBanner } from '@/src/components/TideSafetyBanner';
 import { api, boatName } from '@/src/api';
 import type { User } from '@/src/api';
 import { tideHeightAt, type TidePoint } from '@/src/tide';
@@ -83,6 +84,10 @@ export default function SubidaScreen() {
   }, [editId, router]);
 
   const boatOptions = user?.boats && user.boats.length ? user.boats.map(boatName) : user ? [user.boat_name] : [];
+  const selectedBoatLength = (() => {
+    const b = user?.boats?.find((x) => typeof x !== 'string' && x.name === boat);
+    return b && typeof b !== 'string' ? b.length : null;
+  })();
 
   const handleSubmit = async () => {
     setError(null);
@@ -180,6 +185,14 @@ export default function SubidaScreen() {
                 />
               </View>
             </View>
+
+            <TideSafetyBanner
+              testID="subida-tide-safety"
+              points={tidePoints}
+              type="subida"
+              time={bookingTime}
+              boatLength={selectedBoatLength}
+            />
 
             <View style={{ marginTop: spacing.sm }}>
               <Text style={styles.fieldLabel}>Observação</Text>

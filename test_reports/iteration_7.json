@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration 7 fully verified. Backend (10/10 pytest pass): POST /api/login accepts 5-digit CPF prefix -- '55555'->is_staff=true, '00000'->is_admin=true, '11111'->João. '111' returns 400, '98765' returns 404. GET /api/users excludes BOTH admin and staff (verified 00000000000 & 55555555555 absent, 11111/22222/33333 present) and returns boats as objects with length (Aurora=34ft). PATCH /api/requests/{id}/complete sets status=concluida + returned_at (verified via GET), 404 on unknown id. /api/tides/{today} returns 4 real São Sebastião extremes. Frontend (mobile 390x844): (1) Home cards renamed correctly to 'Confirmar/Alterar Descida' and 'Confirmar/Alterar Subida'. (2) Login redirect: 55555 -> /staff, 00000 -> /admin, 11111 -> /home. (3) Staff panel shows sorted-by-time list, only 'Confirmar descida/subida' button (staff-confirm-{id}) on 'agendada' rows; no edit/cancel/clientes controls; tap fires PATCH /complete and row updates to Concluída (verified backend status=concluida). (4) Admin panel exposes admin-status-button that navigates to a read-only 2-section 'Status das Lanchas' screen ('Descidas solicitadas' + 'Subidas solicitadas') with Lancha/Horário/Status columns, ordered by time, count pills, obs shown, no editing controls. (5) LOW-TIDE BANNER (real TábuaMaré data - today 12:21 low of 0.38m): Descida form with Aurora (34ft, threshold 0.8m) at 12:00 shows red banner 'Maré prevista 0,38 m — mínimo seguro 0,80 m ... Próximo horário com maré segura: 16:00' (testID descida-tide-safety). At 17:00 (0.92m ≥ 0.8m) banner disappears. Switching boat to Estrela do Mar (24ft, threshold 0.5m) at 12:00 shows banner with 0,50 m threshold and next safe time 14:00 (correctly different threshold). Subida form works identically (subida-tide-safety). All 4 new features + regression flows pass.",
+  "backend_issues": {"critical": [], "minor": [
+    {"endpoint": "/api/login (client with no is_staff key)", "issue": "Pre-seeded João record lacks is_staff key entirely (not False) because seed_users uses $set and older records were written before is_staff field existed; the frontend treats undefined as falsy so redirect still works. Cosmetic: seed_users could $set is_staff=False on all client seeds for consistency."}
+  ]},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "shadow* style props deprecation warning", "issue": "Console shows 'shadow* style props are deprecated. Use boxShadow.' — style objects on login/other screens use shadowColor/shadowOffset/shadowOpacity/shadowRadius. Reference: /app/frontend/app/index.tsx:117-121 (logoBadge). Not blocking on native (still works on iOS), but generates console warnings on web preview."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_marina_iteration7.py",
+    "/app/test_reports/pytest/iteration7_results.xml"
+  ],
+  "action_items": [
+    "Optional/cosmetic: migrate remaining shadow* style props to boxShadow (or wrap in Platform.select) to silence RN 0.75+ deprecation warnings on web.",
+    "Optional/cosmetic: extend seed_users to $set is_staff=False on the three client seeds so every user document has the field explicitly."
+  ],
+  "critical_code_review_comments": [
+    "server.py:225-236 login uses regex prefix match `^{prefix}` after normalize_cpf — safe because normalize_cpf strips non-digits and prefix is exactly 5 digits (no regex injection possible).",
+    "server.py:492-500 list_users correctly filters `is_admin != true AND is_staff != true` and normalizes legacy string boats to objects on read — good backwards compat.",
+    "server.py:560-572 seed staff user has is_staff=True and boat_name empty — matches spec (staff has no lancha).",
+    "src/tide.ts:69-81 tideThresholdForLength / isTideUnsafe implement the exact spec (<=20 none, (20,28] 0.5, (28,34] 0.8, >34 1.0) using <= boundaries — correct.",
+    "src/tide.ts:98-114 nextSafeTime iterates half-hour slots strictly greater than fromTime and returns the first slot whose interpolated tide >= threshold — matches expected behavior; verified end-to-end (16:00 next safe for Aurora, 14:00 for Estrela).",
+    "TideSafetyBanner.tsx:22-42 guards on `!time`, computes threshold via tideThresholdForLength, hides itself when isTideUnsafe is false, otherwise renders red banner with next safe time — clean.",
+    "app/index.tsx:29-49 login redirect chain `user.is_admin ? /admin : user.is_staff ? /staff : /home` matches spec.",
+    "app/staff.tsx:48-57 optimistic UI: marks row concluida locally, then calls api.completeRequest with load() rollback on failure — responsive and safe.",
+    "app/admin-status.tsx:69-71 two filtered+time-sorted sections (descidas/subidas), zebra rows, no editing controls — spec-compliant read-only."
+  ],
+  "updated_files": ["/app/backend/tests/test_marina_iteration7.py (new)"],
+  "success_rate": {"backend": "100% (10/10)", "frontend": "100% (login redirects, home renames, staff panel confirm-only + confirm-flow, admin-status read-only 2 sections, low-tide banner triggers correctly for Aurora 34ft & Estrela 24ft on both descida and subida with correct threshold + next safe time)"},
+  "seed_data_creation": "Backend test creates a 17:30 subida (TEST_iter7) and cleans up. Frontend staff-confirm test created a 17:30 subida via API, confirmed via staff UI, then DELETE'd it.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Real São Sebastião TábuaMaré tide is used (anonymous). Today's low tide 12:21 (~0.38m) reliably triggers the low-tide banner for boats >20ft at times 12:00-13:30. High points around 04:42 (1.02m) and 17:02 (0.92m). To test the banner deterministically: (a) login as 33333 (Carlos), (b) pick Aurora (34ft, threshold 0.8m) or Estrela do Mar (24ft, threshold 0.5m), (c) choose date=today and time=12:00. The banner testID is `descida-tide-safety` / `subida-tide-safety`. To set the date field, use JS: `Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'YYYY-MM-DD')` + dispatch input+change events (the RN Web date input is a native <input type=date>). Time slots are individual buttons `descida-time-field-slot-HH:MM`. Staff panel testIDs: `staff-title`, `staff-logout`, `staff-row-{id}`, `staff-confirm-{id}`. Admin-status testIDs: `status-title`, `status-row-{id}`, `back-button`. Home card testIDs: `card-solicitar-descida`, `card-solicitar-subida`, `card-alterar-descida`, `card-alterar-subida`. When switching between admin and admin-status inside expo-router the previous screen stays mounted; use `page.locator(':visible')` or query on the current screen only — do NOT rely on absence of testIDs across screens."
+}

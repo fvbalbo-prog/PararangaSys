@@ -52,6 +52,16 @@ Aplicativo mobile (React Native/Expo) para os proprietários de lanchas da Marin
 - **Alertas de Atraso**: banner no topo + destaque vermelho no Quadro e na Movimentação para subidas cujo horário passou +15 min sem status concluída (apenas no dia atual).
 - **Cadastro de Lanchas** (`/admin-clientes`): admin lista clientes, adiciona/remove lanchas com **calado (m)** e **comprimento (pés)**, e cadastra novos clientes. Modelo `boats` migrado de string para objeto `{name, draft, length}` (com compatibilidade retroativa).
 
+## Features adicionadas (2026-08-18 - iteração 7)
+- **Login por 5 dígitos**: login usa apenas os 5 primeiros números do CPF (match por prefixo).
+- **Alerta de maré baixa no agendamento**: nos formulários, se a maré no horário for abaixo do seguro para o porte da lancha, mostra aviso vermelho e sugere o próximo horário com maré segura. Regras por comprimento (pés): ≤20 sem alerta; 20–28 <0,5m; 28–34 <0,8m; >34 <1,0m.
+- **Painel de Funcionários** (`/staff`, CPF `55555555555`): acesso restrito — apenas confirmar (concluir) descidas/subidas.
+- **Painel de Status (somente leitura)** (`/admin-status`, botão no painel admin): 2 seções por ordem de horário — Descidas solicitadas e Subidas solicitadas (Lancha/Horário/Status/Observação).
+- **Rótulos**: cards da home renomeados para "Confirmar/Alterar Descida" e "Confirmar/Alterar Subida".
+
+## CPFs e perfis
+- `11111` João (cliente) • `22222` Maria • `33333` Carlos • `00000` Admin (painel completo) • `55555` Funcionário (apenas confirmar).
+
 ## Backlog (solicitado, ainda pendente)
 - Busca por lancha no quadro
 - Exportar quadro do dia em PDF

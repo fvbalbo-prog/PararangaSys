@@ -39,7 +39,7 @@ const CARDS: CardDef[] = [
   },
   {
     id: 'alt-desc',
-    title: 'Alterar Descida',
+    title: 'Confirmar/Alterar Descida',
     subtitle: 'Editar solicitações do dia',
     icon: 'create-outline',
     variant: 'secondary',
@@ -48,7 +48,7 @@ const CARDS: CardDef[] = [
   },
   {
     id: 'alt-sub',
-    title: 'Alterar Subida',
+    title: 'Confirmar/Alterar Subida',
     subtitle: 'Editar solicitações do dia',
     icon: 'time-outline',
     variant: 'secondary',

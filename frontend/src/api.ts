@@ -13,6 +13,7 @@ export type User = {
   boat_name: string;
   boats?: (Boat | string)[];
   is_admin?: boolean;
+  is_staff?: boolean;
 };
 
 export type RequestType = 'descida' | 'subida';

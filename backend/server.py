@@ -65,6 +65,7 @@ class User(BaseModel):
     boat_name: str
     boats: List[Boat] = []
     is_admin: bool = False
+    is_staff: bool = False
 
 
 class LoginInput(BaseModel):
@@ -490,7 +491,9 @@ def _boat_name(b) -> str:
 
 @api_router.get("/users", response_model=List[User])
 async def list_users():
-    docs = await db.users.find({"is_admin": {"$ne": True}}, {"_id": 0}).sort("name", 1).to_list(1000)
+    docs = await db.users.find(
+        {"is_admin": {"$ne": True}, "is_staff": {"$ne": True}}, {"_id": 0}
+    ).sort("name", 1).to_list(1000)
     # normalize legacy string boats -> objects
     for d in docs:
         d["boats"] = [b if isinstance(b, dict) else {"name": b} for b in d.get("boats", [])]
@@ -563,7 +566,9 @@ SEED_USERS = [
     {"cpf": "33333333333", "name": "Carlos Oliveira", "phone": "(48) 99999-3333", "boat_name": "Aurora",
      "boats": [{"name": "Aurora", "draft": 1.2, "length": 34}, {"name": "Estrela do Mar", "draft": 0.7, "length": 24}], "is_admin": False},
     {"cpf": "00000000000", "name": "Administração Marina", "phone": "(48) 3000-0000", "boat_name": "Marina Pararanga",
-     "boats": [], "is_admin": True},
+     "boats": [], "is_admin": True, "is_staff": False},
+    {"cpf": "55555555555", "name": "Funcionário Marina", "phone": "(48) 3000-0055", "boat_name": "",
+     "boats": [], "is_admin": False, "is_staff": True},
 ]
 
 

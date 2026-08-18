@@ -151,10 +151,18 @@ export default function AdminScreen() {
           <Text style={styles.title} testID="admin-title">Movimentação do dia</Text>
         </View>
         <Pressable
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-status'); }}
+          hitSlop={12}
+          testID="admin-status-button"
+          style={styles.logoutBtn}
+        >
+          <Ionicons name="eye-outline" size={22} color={colors.onBrandPrimary} />
+        </Pressable>
+        <Pressable
           onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-clientes'); }}
           hitSlop={12}
           testID="admin-clientes-button"
-          style={styles.logoutBtn}
+          style={[styles.logoutBtn, { marginLeft: spacing.sm }]}
         >
           <Ionicons name="people-outline" size={22} color={colors.onBrandPrimary} />
         </Pressable>
