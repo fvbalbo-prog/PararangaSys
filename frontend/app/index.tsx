@@ -8,7 +8,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Keyboard,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -61,8 +60,7 @@ export default function LoginScreen() {
       style={styles.root}
       testID="login-screen"
     >
-      <Pressable onPress={Keyboard.dismiss} style={{ flex: 1 }}>
-        <View style={{ flex: 1 }}>
+      <View style={{ flex: 1 }}>
           <View style={styles.hero}>
             <Image
               source={{ uri: 'https://images.pexels.com/photos/7995000/pexels-photo-7995000.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940' }}
@@ -117,7 +115,6 @@ export default function LoginScreen() {
             </Pressable>
           </View>
         </View>
-      </Pressable>
     </KeyboardAvoidingView>
   );
 }

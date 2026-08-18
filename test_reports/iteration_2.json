@@ -1,0 +1,28 @@
+{
+  "summary": "Verified all 3 bug fixes and regression flows on web preview. BUG 1 (login CPF input): tapping cpf-input accepts typing, formatted 111.111.111-11, login redirects to /home. BUG 2 (descida date/time): descida-date-field, descida-time-field, descida-return-date-field, descida-return-time-field all accept input on web (HTML date/time inputs from DateField.web.tsx). BUG 3 (subida date/time): subida-date-field and subida-time-field accept input. Full descida create flow succeeded (all fields filled + submit + returned to home, no error). Full subida create flow succeeded. Alterar Descida lists today's descidas (5 rows), tapping row opens 'Alterar Descida' with pre-filled date=2026-08-18, dest=TEST_Updated, passengers=5. Alterar Subida lists today's subidas (3 rows), tapping row opens 'Alterar Subida' with pre-filled date + time=17:00. Backend regression: 13/13 pytest tests pass (login valid/formatted/unregistered/invalid, descida create/time-range/missing-fields, subida create/time-range, update, today filtering by type, get-not-found).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_marina_api.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "DateField.web.tsx correctly renders native HTML <input type='date'|'time'> for web preview; native DateField.tsx retained for iOS/Android. Metro auto-resolves .web extension.",
+    "Login screen no longer wraps TextInput in Pressable/TouchableWithoutFeedback — cpf-input receives focus and accepts typing.",
+    "Backend validates descida 08:30-17:00 and subida 08:30-17:30; required descida fields enforced with 400 + Portuguese error messages.",
+    "MongoDB _id excluded via projection in all queries."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "100% (13/13)", "frontend": "100% (all 3 bug fixes + create/edit flows for descida & subida verified)" },
+  "seed_data_creation": "UI test created descida+subida requests for today (2026-08-18) via API for user João (11111111111) and Maria (22222222222). Alterar screens show these plus pytest-seeded rows. All test data date-scoped (today only).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Web preview uses DateField.web.tsx exposing native HTML date/time inputs — fill via page.fill('[data-testid=\"...-field\"]', 'YYYY-MM-DD' or 'HH:MM'). Home card testIDs: card-solicitar-descida, card-solicitar-subida, card-alterar-descida, card-alterar-subida. Login: cpf-input + login-submit-button. Seeded users: 11111111111/22222222222/33333333333.",
+  "rca_of_issue": "All 3 reported bugs confirmed fixed. Root cause of bug 1 was Pressable/TouchableWithoutFeedback wrapping the TextInput on login (blocked focus on web). Root cause of bugs 2 & 3 was @react-native-community/datetimepicker not rendering on web — resolved by adding platform-specific DateField.web.tsx that uses native HTML inputs. No further action required."
+}
