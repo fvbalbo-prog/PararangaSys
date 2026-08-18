@@ -24,6 +24,7 @@ export type MarinaRequest = {
   passengers?: number | null;
   responsible?: string | null;
   observation?: string | null;
+  tide_height?: number | null;
   status: RequestStatus;
   returned_at?: string | null;
   user_name?: string;
@@ -71,5 +72,37 @@ export const api = {
     req<MarinaRequest>(`/requests/${id}/cancel`, { method: 'PATCH' }),
   confirmReturn: (id: string) =>
     req<MarinaRequest>(`/requests/${id}/confirm-return`, { method: 'PATCH' }),
+  completeRequest: (id: string) =>
+    req<MarinaRequest>(`/requests/${id}/complete`, { method: 'PATCH' }),
   getRequest: (id: string) => req<MarinaRequest>(`/requests/${id}`),
+  slots: (type: RequestType, date: string) =>
+    req<SlotInfo[]>(`/slots?type=${type}&date=${date}`),
+  getTides: (date: string) => req<TideDay>(`/tides/${date}`),
+  setTides: (date: string, points: { time: string; height: number }[]) =>
+    req<TideDay>(`/tides/${date}`, { method: 'PUT', body: JSON.stringify({ points }) }),
+  listUsers: () => req<Client[]>('/users'),
+  createClient: (data: { cpf: string; name: string; phone: string; boats: string[] }) =>
+    req<Client>('/users', { method: 'POST', body: JSON.stringify(data) }),
+  addBoat: (cpf: string, boat: string) =>
+    req<Client>(`/users/${cpf}/boats`, { method: 'POST', body: JSON.stringify({ boat }) }),
+  removeBoat: (cpf: string, boat: string) =>
+    req<Client>(`/users/${cpf}/boats?boat=${encodeURIComponent(boat)}`, { method: 'DELETE' }),
+};
+
+export type SlotInfo = {
+  time: string;
+  count: number;
+  capacity: number | null;
+  available: boolean;
+  unlimited: boolean;
+};
+
+export type TideDay = { date: string; points: { time: string; height: number }[] };
+
+export type Client = {
+  cpf: string;
+  name: string;
+  phone: string;
+  boats: string[];
+  boat_name?: string;
 };

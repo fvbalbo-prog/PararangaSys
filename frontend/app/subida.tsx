@@ -18,8 +18,10 @@ import * as Haptics from 'expo-haptics';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { DateField, DateHelpers } from '@/src/components/DateField';
 import { SelectField } from '@/src/components/SelectField';
+import { TimeSlotField } from '@/src/components/TimeSlotField';
 import { api } from '@/src/api';
 import type { User } from '@/src/api';
+import { tideHeightAt, type TidePoint } from '@/src/tide';
 
 function toISODate(d: Date) {
   return `${d.getFullYear()}-${DateHelpers.pad(d.getMonth() + 1)}-${DateHelpers.pad(d.getDate())}`;
@@ -28,13 +30,6 @@ function fromISODate(s?: string | null): Date | null {
   if (!s) return null;
   const [y, m, d] = s.split('-').map(Number);
   return new Date(y, (m || 1) - 1, d || 1);
-}
-function timeToDate(t?: string | null): Date | null {
-  if (!t) return null;
-  const [h, m] = t.split(':').map(Number);
-  const d = new Date();
-  d.setHours(h || 0, m || 0, 0, 0);
-  return d;
 }
 
 export default function SubidaScreen() {
@@ -48,9 +43,18 @@ export default function SubidaScreen() {
   const [error, setError] = useState<string | null>(null);
 
   const [date, setDate] = useState<Date | null>(null);
-  const [time, setTime] = useState<Date | null>(null);
+  const [bookingTime, setBookingTime] = useState<string | null>(null);
   const [boat, setBoat] = useState<string | null>(null);
   const [observation, setObservation] = useState('');
+  const [tidePoints, setTidePoints] = useState<TidePoint[]>([]);
+
+  useEffect(() => {
+    if (!date) return;
+    api
+      .getTides(toISODate(date))
+      .then((t) => setTidePoints(t.points || []))
+      .catch(() => setTidePoints([]));
+  }, [date]);
 
   useEffect(() => {
     (async () => {
@@ -66,7 +70,7 @@ export default function SubidaScreen() {
           setLoading(true);
           const r = await api.getRequest(editId);
           setDate(fromISODate(r.date));
-          setTime(timeToDate(r.time));
+          setBookingTime(r.time);
           setBoat(r.boat_name || boatList[0] || null);
           setObservation(r.observation || '');
         } catch (e: any) {
@@ -83,7 +87,7 @@ export default function SubidaScreen() {
   const handleSubmit = async () => {
     setError(null);
     if (!user) return;
-    if (!date || !time || !boat) {
+    if (!date || !bookingTime || !boat) {
       setError('Preencha a lancha, a data e o horário do retorno.');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       return;
@@ -92,8 +96,9 @@ export default function SubidaScreen() {
       type: 'subida' as const,
       cpf: user.cpf,
       date: toISODate(date),
-      time: DateHelpers.formatTime(time),
+      time: bookingTime,
       boat_name: boat,
+      tide_height: tideHeightAt(tidePoints, bookingTime),
       observation,
     };
     try {
@@ -157,20 +162,21 @@ export default function SubidaScreen() {
                   label="Data do retorno"
                   mode="date"
                   value={date}
-                  onChange={setDate}
+                  onChange={(d) => { setDate(d); setBookingTime(null); }}
                   minimumDate={new Date()}
                 />
               </View>
               <View style={{ width: spacing.md }} />
               <View style={{ flex: 1 }}>
-                <DateField
+                <TimeSlotField
                   testID="subida-time-field"
                   label="Horário"
-                  mode="time"
-                  value={time}
-                  onChange={setTime}
-                  minTime={{ h: 8, m: 30 }}
-                  maxTime={{ h: 17, m: 30 }}
+                  type="subida"
+                  date={date ? toISODate(date) : null}
+                  value={bookingTime}
+                  onChange={setBookingTime}
+                  tidePoints={tidePoints}
+                  editingId={editId}
                 />
               </View>
             </View>

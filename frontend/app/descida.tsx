@@ -18,6 +18,9 @@ import * as Haptics from 'expo-haptics';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { DateField, DateHelpers } from '@/src/components/DateField';
 import { SelectField } from '@/src/components/SelectField';
+import { TimeSlotField } from '@/src/components/TimeSlotField';
+import { TideChip } from '@/src/components/TideChip';
+import { tideHeightAt, type TidePoint } from '@/src/tide';
 import { api } from '@/src/api';
 import type { User } from '@/src/api';
 
@@ -48,7 +51,7 @@ export default function DescidaScreen() {
   const [error, setError] = useState<string | null>(null);
 
   const [date, setDate] = useState<Date | null>(null);
-  const [time, setTime] = useState<Date | null>(null);
+  const [bookingTime, setBookingTime] = useState<string | null>(null);
   const [boat, setBoat] = useState<string | null>(null);
   const [returnDate, setReturnDate] = useState<Date | null>(null);
   const [returnTime, setReturnTime] = useState<Date | null>(null);
@@ -56,6 +59,16 @@ export default function DescidaScreen() {
   const [passengers, setPassengers] = useState('');
   const [responsible, setResponsible] = useState('');
   const [observation, setObservation] = useState('');
+  const [tidePoints, setTidePoints] = useState<TidePoint[]>([]);
+
+  // Load tide table whenever the descida date changes
+  useEffect(() => {
+    if (!date) return;
+    api
+      .getTides(toISODate(date))
+      .then((t) => setTidePoints(t.points || []))
+      .catch(() => setTidePoints([]));
+  }, [date]);
 
   useEffect(() => {
     (async () => {
@@ -71,7 +84,7 @@ export default function DescidaScreen() {
           setLoading(true);
           const r = await api.getRequest(editId);
           setDate(fromISODate(r.date));
-          setTime(timeToDate(r.time));
+          setBookingTime(r.time);
           setBoat(r.boat_name || boatList[0] || null);
           setReturnDate(fromISODate(r.expected_return_date));
           setReturnTime(timeToDate(r.expected_return_time));
@@ -93,7 +106,7 @@ export default function DescidaScreen() {
   const handleSubmit = async () => {
     setError(null);
     if (!user) return;
-    if (!date || !time || !boat || !returnDate || !returnTime || !destination || !passengers || !responsible) {
+    if (!date || !bookingTime || !boat || !returnDate || !returnTime || !destination || !passengers || !responsible) {
       setError('Preencha todos os campos obrigatórios.');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       return;
@@ -102,8 +115,9 @@ export default function DescidaScreen() {
       type: 'descida' as const,
       cpf: user.cpf,
       date: toISODate(date),
-      time: DateHelpers.formatTime(time),
+      time: bookingTime,
       boat_name: boat,
+      tide_height: tideHeightAt(tidePoints, bookingTime),
       expected_return_date: toISODate(returnDate),
       expected_return_time: DateHelpers.formatTime(returnTime),
       destination,
@@ -173,20 +187,21 @@ export default function DescidaScreen() {
                   label="Dia da descida"
                   mode="date"
                   value={date}
-                  onChange={setDate}
+                  onChange={(d) => { setDate(d); setBookingTime(null); }}
                   minimumDate={new Date()}
                 />
               </View>
               <View style={{ width: spacing.md }} />
               <View style={{ flex: 1 }}>
-                <DateField
+                <TimeSlotField
                   testID="descida-time-field"
                   label="Horário"
-                  mode="time"
-                  value={time}
-                  onChange={setTime}
-                  minTime={{ h: 8, m: 30 }}
-                  maxTime={{ h: 17, m: 0 }}
+                  type="descida"
+                  date={date ? toISODate(date) : null}
+                  value={bookingTime}
+                  onChange={setBookingTime}
+                  tidePoints={tidePoints}
+                  editingId={editId}
                 />
               </View>
             </View>
@@ -214,6 +229,14 @@ export default function DescidaScreen() {
                 />
               </View>
             </View>
+            {returnTime ? (
+              <View style={{ marginTop: -spacing.sm, marginBottom: spacing.md }}>
+                <TideChip
+                  testID="descida-return-tide"
+                  height={tideHeightAt(tidePoints, DateHelpers.formatTime(returnTime))}
+                />
+              </View>
+            ) : null}
 
             <View style={styles.fieldGroup}>
               <Text style={styles.label}>Destino</Text>

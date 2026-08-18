@@ -1,0 +1,50 @@
+{
+  "summary": "Iteration 5 (tide + half-hour slots + capacity + logo) largely works. Backend: 15/16 pytest pass on /app/backend/tests/test_marina_iteration5.py. GET /api/tides/2026-08-18 returns real São Sebastião tide points from TábuaMaré (e.g. 00:01/0.30, 04:42/1.02, 12:21/0.38, 17:02/0.92) and second call hits the Mongo cache. Half-hour validation returns 400 'meia em meia hora' for :15/:45 and accepts :00/:30. Capacity: 4th descida at same slot returns 409 with 'Próximo horário disponível: 13:30' suggestion; subida 17:30 accepts >3 bookings (unlimited); other subida slots still enforce 3/slot. GET /api/slots returns half-hour cadence 08:30–17:00 (descida) / 08:30–17:30 (subida) with count/available/unlimited flags; 17:30 subida has capacity=null,unlimited=true. Frontend (375x667): login shows brand-logo, slot picker modal opens with 3-column grid of half-hour slots showing time + tide height (comma decimal, color-coded 0,52 m yellow, 0,71 m yellow, 0,64 m yellow) + 'x/3' capacity; selecting a slot displays 'Maré às 09:00: 0,64 m' chip below the field; date change resets slot as expected. ONE REAL BACKEND BUG FOUND: PUT /api/requests/{id} silently drops tide_height because it is missing from the RequestUpdate model — POST persists tide_height correctly but PUT does not.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "PUT /api/requests/{id}",
+        "issue": "tide_height is silently ignored on update. server.py RequestUpdate (lines 96–105) does not declare tide_height, so Pydantic drops it. Verified: POST with tide_height=0.30 then PUT {tide_height: 0.85} returns 200 but GET still shows 0.30. Frontend (descida.tsx L120 / subida.tsx L101) sends tide_height on both create and update, so editing a request that changes time will leave the OLD tide_height in the DB.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_marina_iteration5.py",
+    "/app/test_reports/pytest/iteration5_results.xml"
+  ],
+  "action_items": [
+    "Add `tide_height: Optional[float] = None` to RequestUpdate in /app/backend/server.py (around line 96–105) so PUT persists the recomputed tide height when the client edits the time.",
+    "(Optional) Consider recomputing tide_height server-side from the cached tide_cache on create/update instead of trusting the client — this would keep the field consistent even if a client forgets to send it. Currently the frontend always sends it, so the immediate fix is only the missing field."
+  ],
+  "critical_code_review_comments": [
+    "server.py:26–27 TABUAMARE_API_KEY is loaded from env and only injected as Bearer header — good; the key never leaks to the client since /api/tides/{date} returns only points.",
+    "server.py:419–452 fetch_tabuamare correctly caches per-date in Mongo tide_cache and only stores the response when points is non-empty (avoids caching failures).",
+    "server.py:386–416 _flatten_tide_points is defensively written (walks arbitrary nested dicts/lists, tolerates 'hour'/'time'/'hora' and 'level'/'height'/'altura', handles '3:12'-style padding and comma decimals) — nice.",
+    "server.py:159–169 enforce_capacity correctly excludes cancelled requests via {'status':{'$ne':'cancelada'}} and skips the unlimited 17:30 subida slot; also excludes the doc being updated via exclude_id.",
+    "server.py:145–156 next_available_slot scans forward from the requested time so the 409 suggestion is always in the future — behaves correctly.",
+    "descida.tsx:120 / subida.tsx:101 compute tide_height on submit from the loaded tidePoints using tideHeightAt — matches what is shown on screen, so the number the user sees is the number that is saved (on create).",
+    "tide.ts:15–35 uses cosine interpolation between the 4 daily extremes — reasonable smoothing but note that real tides are not exactly cosine between arbitrary consecutive extremes; error is within a few cm which is acceptable for scheduling.",
+    "TimeSlotField.tsx disables full slots via `disabled={isFull && !selected}` (line 100) so the currently selected slot remains tappable when editing — nice edge case handling.",
+    "MINOR: TimeSlotField.tsx:117 shows 'Livre' for unlimited slots without a count — could be improved to 'Livre (N)' so users see how many boats are already booked for 17:30, but this is a UX suggestion, not a bug."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_marina_iteration5.py (new)"
+  ],
+  "success_rate": {
+    "backend": "94% (15/16 pytest — 1 real bug on PUT tide_height persistence)",
+    "frontend": "100% (logo, slot picker with tide+capacity, tide chip, comma decimal, color coding all verified on Descida form for Maria)"
+  },
+  "seed_data_creation": "Tests use TEST_DATE=2026-08-18 (far future) to avoid clashing with today. Cleanup fixture deletes all requests on that date after the module runs. Tide cache for 2026-08-18 is populated in Mongo (tide_cache collection).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "After main agent adds tide_height to RequestUpdate, rerun `pytest backend/tests/test_marina_iteration5.py::TestTidePersistence -v` to confirm. The parallel flake on test_subida_non_1730_still_limited was caused by pytest-xdist LoadScopeScheduling; it passes serially. If it flakes again, either add pytest markers to serialise the Capacity class or use unique times per test. Slot picker testID pattern: `{parent-testID}-slot-{HH:MM}` (e.g. `descida-time-field-slot-09:00`). Date field on web renders a real <input type=\"date\">, so tests should use `page.query_selector_all('input[type=\"date\"]')[i].fill('YYYY-MM-DD')` — clicking the Pressable does not open a native picker.",
+  "rca_of_issue": "RCA — PUT tide_height not persisted: server.py defines two separate Pydantic models — RequestBase (used for create) HAS tide_height, but RequestUpdate (used for PUT body) does NOT list tide_height. FastAPI validates the PUT body against RequestUpdate and drops the field before it reaches the handler. The dict-comprehension `{k:v for k,v in payload.dict().items() if v is not None}` then never sees tide_height at all. Fix: add `tide_height: Optional[float] = None` to RequestUpdate. Reproduction: POST /api/requests {tide_height:0.30}, note id, PUT /api/requests/{id} {tide_height:0.85} → 200 OK, then GET /api/requests/{id} → tide_height is still 0.30."
+}

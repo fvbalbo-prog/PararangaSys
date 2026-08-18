@@ -3,9 +3,9 @@ import { colors, spacing, radius, typography } from '@/src/theme';
 import type { RequestStatus } from '@/src/api';
 
 const MAP: Record<RequestStatus, { label: string; bg: string; fg: string }> = {
-  agendada: { label: 'Agendada', bg: '#DBEAFE', fg: '#1E3A8A' },
+  agendada: { label: 'Aguardando', bg: '#DBEAFE', fg: '#1E3A8A' },
   cancelada: { label: 'Cancelada', bg: '#FEE2E2', fg: colors.error },
-  concluida: { label: 'Retornou', bg: '#DCFCE7', fg: colors.success },
+  concluida: { label: 'Concluída', bg: '#DCFCE7', fg: colors.success },
 };
 
 export function StatusBadge({ status }: { status: RequestStatus }) {

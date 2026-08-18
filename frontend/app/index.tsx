@@ -80,6 +80,12 @@ export default function LoginScreen() {
           </View>
 
           <View style={styles.form}>
+            <Image
+              source={require('../assets/images/logo.png')}
+              style={styles.logo}
+              contentFit="contain"
+              testID="brand-logo"
+            />
             <Text style={styles.label}>CPF</Text>
             <TextInput
               testID="cpf-input"
@@ -121,8 +127,8 @@ export default function LoginScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.surface },
-  hero: { height: '48%', justifyContent: 'flex-end', backgroundColor: colors.brandPrimary },
-  heroContent: { padding: spacing.xl, paddingBottom: spacing.xxl },
+  hero: { height: '40%', justifyContent: 'flex-end', backgroundColor: colors.brandPrimary },
+  heroContent: { padding: spacing.xl, paddingBottom: spacing.lg },
   heroKicker: {
     color: colors.brandSecondary,
     letterSpacing: 4,
@@ -131,7 +137,7 @@ const styles = StyleSheet.create({
   },
   heroTitle: {
     color: colors.onBrandPrimary,
-    fontSize: 44,
+    fontSize: 40,
     fontWeight: '800',
     marginTop: spacing.xs,
   },
@@ -141,6 +147,7 @@ const styles = StyleSheet.create({
     fontSize: typography.lg,
     marginTop: spacing.sm,
   },
+  logo: { width: '70%', height: 70, alignSelf: 'center', marginBottom: spacing.md },
   form: { flex: 1, padding: spacing.xl, justifyContent: 'space-between' },
   label: {
     color: colors.onSurface,
