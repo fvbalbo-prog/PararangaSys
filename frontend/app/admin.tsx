@@ -45,6 +45,7 @@ export default function AdminScreen() {
   const router = useRouter();
   const [day, setDay] = useState(new Date());
   const [filter, setFilter] = useState<Filter>('todas');
+  const [mode, setMode] = useState<'lista' | 'quadro'>('lista');
   const [items, setItems] = useState<MarinaRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -87,6 +88,22 @@ export default function AdminScreen() {
   const subidas = items.filter((i) => i.type === 'subida' && i.status !== 'cancelada').length;
   const retornos = items.filter((i) => i.status === 'concluida').length;
 
+  // Quadro de Horários: for each descida, find its boat's subida time
+  const activeSubidas = items.filter((i) => i.type === 'subida' && i.status !== 'cancelada');
+  const quadroRows = items
+    .filter((i) => i.type === 'descida' && i.status !== 'cancelada')
+    .sort((a, b) => a.time.localeCompare(b.time))
+    .map((d) => {
+      const sub = activeSubidas.find((s) => s.boat_name === d.boat_name);
+      return {
+        id: d.id,
+        boat: d.boat_name || '—',
+        descida: d.time,
+        subida: sub ? sub.time : d.expected_return_time ? `${d.expected_return_time}*` : '—',
+        concluida: d.status === 'concluida',
+      };
+    });
+
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
       <View style={styles.header}>
@@ -125,86 +142,156 @@ export default function AdminScreen() {
       </View>
 
       <View style={styles.sheet}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.chipRow}
-          style={styles.chipScroller}
-        >
-          {FILTERS.map((f) => {
-            const active = filter === f.key;
-            return (
-              <Pressable
-                key={f.key}
-                testID={`filter-${f.key}`}
-                onPress={() => {
-                  setFilter(f.key);
-                  try {
-                    Haptics.selectionAsync();
-                  } catch {}
-                }}
-                style={[styles.chip, active && styles.chipActive]}
-              >
-                <Text style={[styles.chipText, active && styles.chipTextActive]}>{f.label}</Text>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
+        <View style={styles.modeToggle}>
+          <Pressable
+            testID="mode-lista"
+            onPress={() => { setMode('lista'); try { Haptics.selectionAsync(); } catch {} }}
+            style={[styles.modeBtn, mode === 'lista' && styles.modeBtnActive]}
+          >
+            <Ionicons name="list-outline" size={18} color={mode === 'lista' ? colors.onBrandPrimary : colors.onSurfaceSecondary} />
+            <Text style={[styles.modeText, mode === 'lista' && styles.modeTextActive]}>Movimentação</Text>
+          </Pressable>
+          <Pressable
+            testID="mode-quadro"
+            onPress={() => { setMode('quadro'); try { Haptics.selectionAsync(); } catch {} }}
+            style={[styles.modeBtn, mode === 'quadro' && styles.modeBtnActive]}
+          >
+            <Ionicons name="grid-outline" size={18} color={mode === 'quadro' ? colors.onBrandPrimary : colors.onSurfaceSecondary} />
+            <Text style={[styles.modeText, mode === 'quadro' && styles.modeTextActive]}>Quadro de Horários</Text>
+          </Pressable>
+        </View>
 
-        {loading ? (
-          <View style={styles.center}>
-            <ActivityIndicator color={colors.brandPrimary} />
-          </View>
-        ) : filtered.length === 0 ? (
-          <View style={styles.center}>
-            <View style={styles.emptyIcon}>
-              <Ionicons name="compass-outline" size={44} color={colors.brandSecondary} />
+        {mode === 'quadro' ? (
+          loading ? (
+            <View style={styles.center}>
+              <ActivityIndicator color={colors.brandPrimary} />
             </View>
-            <Text style={styles.emptyTitle}>Nenhuma movimentação</Text>
-            <Text style={styles.emptySubtitle}>Não há solicitações para este dia.</Text>
-          </View>
-        ) : (
-          <FlatList
-            data={filtered}
-            keyExtractor={(item) => item.id}
-            contentContainerStyle={styles.list}
-            refreshControl={
-              <RefreshControl
-                refreshing={refreshing}
-                onRefresh={() => {
-                  setRefreshing(true);
-                  load();
-                }}
-                tintColor={colors.brandPrimary}
-              />
-            }
-            renderItem={({ item }) => (
-              <View style={styles.card} testID={`admin-row-${item.id}`}>
-                <View style={[styles.timeBlock, item.status === 'cancelada' && { backgroundColor: colors.onSurfaceTertiary }]}>
-                  <Text style={styles.timeText}>{item.time}</Text>
-                  <Text style={styles.timeLabel}>{item.type === 'descida' ? 'DESCIDA' : 'SUBIDA'}</Text>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.cardTitle} numberOfLines={1}>
-                    {item.user_name} • {item.boat_name}
-                  </Text>
-                  {item.type === 'descida' ? (
-                    <Text style={styles.cardMeta} numberOfLines={1}>
-                      {item.destination} • {item.passengers} pax • Ret. {item.expected_return_time}
-                    </Text>
-                  ) : (
-                    <Text style={styles.cardMeta}>Retorno agendado</Text>
-                  )}
-                  {item.responsible ? (
-                    <Text style={styles.cardMeta}>Resp.: {item.responsible}</Text>
-                  ) : null}
-                  <View style={{ marginTop: spacing.sm }}>
-                    <StatusBadge status={item.status} />
-                  </View>
-                </View>
+          ) : quadroRows.length === 0 ? (
+            <View style={styles.center}>
+              <View style={styles.emptyIcon}>
+                <Ionicons name="grid-outline" size={44} color={colors.brandSecondary} />
               </View>
+              <Text style={styles.emptyTitle}>Nenhuma descida hoje</Text>
+              <Text style={styles.emptySubtitle}>O quadro mostra as descidas do dia.</Text>
+            </View>
+          ) : (
+            <FlatList
+              data={quadroRows}
+              keyExtractor={(r) => r.id}
+              contentContainerStyle={styles.quadroList}
+              ListHeaderComponent={
+                <View style={styles.quadroHead}>
+                  <Text style={[styles.quadroHeadText, { flex: 2 }]}>Lancha</Text>
+                  <Text style={[styles.quadroHeadText, styles.quadroCol]}>Descida</Text>
+                  <Text style={[styles.quadroHeadText, styles.quadroCol]}>Subida</Text>
+                </View>
+              }
+              refreshControl={
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={() => { setRefreshing(true); load(); }}
+                  tintColor={colors.brandPrimary}
+                />
+              }
+              renderItem={({ item, index }) => (
+                <View style={[styles.quadroRow, index % 2 === 1 && { backgroundColor: colors.surfaceSecondary }]} testID={`quadro-row-${item.id}`}>
+                  <View style={{ flex: 2, flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+                    <Ionicons name="boat" size={16} color={colors.brandPrimary} />
+                    <Text style={styles.quadroBoat} numberOfLines={1}>{item.boat}</Text>
+                  </View>
+                  <Text style={[styles.quadroTime, styles.quadroCol]}>{item.descida}</Text>
+                  <Text style={[styles.quadroTime, styles.quadroCol, item.concluida && { color: colors.success }]}>{item.subida}</Text>
+                </View>
+              )}
+              ListFooterComponent={
+                <Text style={styles.quadroNote}>* horário previsto de retorno (sem solicitação de subida)</Text>
+              }
+            />
+          )
+        ) : (
+          <>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.chipRow}
+              style={styles.chipScroller}
+            >
+              {FILTERS.map((f) => {
+                const active = filter === f.key;
+                return (
+                  <Pressable
+                    key={f.key}
+                    testID={`filter-${f.key}`}
+                    onPress={() => {
+                      setFilter(f.key);
+                      try {
+                        Haptics.selectionAsync();
+                      } catch {}
+                    }}
+                    style={[styles.chip, active && styles.chipActive]}
+                  >
+                    <Text style={[styles.chipText, active && styles.chipTextActive]}>{f.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            {loading ? (
+              <View style={styles.center}>
+                <ActivityIndicator color={colors.brandPrimary} />
+              </View>
+            ) : filtered.length === 0 ? (
+              <View style={styles.center}>
+                <View style={styles.emptyIcon}>
+                  <Ionicons name="compass-outline" size={44} color={colors.brandSecondary} />
+                </View>
+                <Text style={styles.emptyTitle}>Nenhuma movimentação</Text>
+                <Text style={styles.emptySubtitle}>Não há solicitações para este dia.</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={filtered}
+                keyExtractor={(item) => item.id}
+                contentContainerStyle={styles.list}
+                refreshControl={
+                  <RefreshControl
+                    refreshing={refreshing}
+                    onRefresh={() => {
+                      setRefreshing(true);
+                      load();
+                    }}
+                    tintColor={colors.brandPrimary}
+                  />
+                }
+                renderItem={({ item }) => (
+                  <View style={styles.card} testID={`admin-row-${item.id}`}>
+                    <View style={[styles.timeBlock, item.status === 'cancelada' && { backgroundColor: colors.onSurfaceTertiary }]}>
+                      <Text style={styles.timeText}>{item.time}</Text>
+                      <Text style={styles.timeLabel}>{item.type === 'descida' ? 'DESCIDA' : 'SUBIDA'}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.cardTitle} numberOfLines={1}>
+                        {item.user_name} • {item.boat_name}
+                      </Text>
+                      {item.type === 'descida' ? (
+                        <Text style={styles.cardMeta} numberOfLines={1}>
+                          {item.destination} • {item.passengers} pax • Ret. {item.expected_return_time}
+                        </Text>
+                      ) : (
+                        <Text style={styles.cardMeta}>Retorno agendado</Text>
+                      )}
+                      {item.responsible ? (
+                        <Text style={styles.cardMeta}>Resp.: {item.responsible}</Text>
+                      ) : null}
+                      <View style={{ marginTop: spacing.sm }}>
+                        <StatusBadge status={item.status} />
+                      </View>
+                    </View>
+                  </View>
+                )}
+              />
             )}
-          />
+          </>
         )}
       </View>
     </SafeAreaView>
@@ -261,6 +348,50 @@ const styles = StyleSheet.create({
     borderTopRightRadius: radius.lg,
     paddingTop: spacing.lg,
   },
+  modeToggle: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.md,
+    backgroundColor: colors.surfaceSecondary,
+    borderRadius: radius.md,
+    padding: spacing.xs,
+  },
+  modeBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    paddingVertical: spacing.md,
+    borderRadius: radius.sm,
+  },
+  modeBtnActive: { backgroundColor: colors.brandPrimary },
+  modeText: { color: colors.onSurfaceSecondary, fontSize: typography.sm, fontWeight: '700' },
+  modeTextActive: { color: colors.onBrandPrimary },
+  quadroList: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xxxl },
+  quadroHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.brandPrimary,
+    borderTopLeftRadius: radius.md,
+    borderTopRightRadius: radius.md,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+  },
+  quadroHeadText: { color: colors.onBrandPrimary, fontSize: typography.sm, fontWeight: '800' },
+  quadroCol: { flex: 1, textAlign: 'center' },
+  quadroRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.divider,
+  },
+  quadroBoat: { color: colors.onSurface, fontSize: typography.base, fontWeight: '700', flexShrink: 1 },
+  quadroTime: { color: colors.onSurface, fontSize: typography.lg, fontWeight: '700' },
+  quadroNote: { color: colors.onSurfaceTertiary, fontSize: typography.sm, marginTop: spacing.md, textAlign: 'center' },
   chipScroller: { maxHeight: 56 },
   chipRow: { gap: spacing.sm, paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
   chip: {

@@ -36,6 +36,11 @@ Aplicativo mobile (React Native/Expo) para os proprietários de lanchas da Marin
 - **Histórico** (`/historico`): todas as solicitações do usuário logado.
 - **Painel da Marina** (`/admin`): acesso via CPF admin `00000000000`; navegação por dia, contadores (Descidas/Subidas/Retornos) e filtros (Todas/Descidas/Subidas).
 
+## Features adicionadas (2026-08-18 - iteração 4)
+- **Múltiplas lanchas por cliente**: `users.boats: List[str]`; dropdown de seleção de lancha nos formulários de descida e subida (SelectField). Seed: João=1, Maria=3, Carlos=2 lanchas.
+- **Observação na subida**: campo de observação adicionado ao formulário de subida.
+- **Quadro de Horários** (dentro do Painel da Marina): toggle Movimentação/Quadro; tabela Lancha / Horário descida / Horário de subida com as descidas do dia (subida = solicitação de subida da lancha ou previsão de retorno marcada com *).
+
 ## CPF administrador
 - `00000000000` — Administração Marina (redireciona para o Painel).
 

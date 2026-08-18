@@ -17,6 +17,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { DateField, DateHelpers } from '@/src/components/DateField';
+import { SelectField } from '@/src/components/SelectField';
 import { api } from '@/src/api';
 import type { User } from '@/src/api';
 
@@ -48,6 +49,7 @@ export default function DescidaScreen() {
 
   const [date, setDate] = useState<Date | null>(null);
   const [time, setTime] = useState<Date | null>(null);
+  const [boat, setBoat] = useState<string | null>(null);
   const [returnDate, setReturnDate] = useState<Date | null>(null);
   const [returnTime, setReturnTime] = useState<Date | null>(null);
   const [destination, setDestination] = useState('');
@@ -59,7 +61,10 @@ export default function DescidaScreen() {
     (async () => {
       const raw = await AsyncStorage.getItem('user');
       if (!raw) return router.replace('/');
-      setUser(JSON.parse(raw));
+      const u: User = JSON.parse(raw);
+      setUser(u);
+      const boatList = u.boats && u.boats.length ? u.boats : [u.boat_name];
+      if (!editId && boatList.length) setBoat(boatList[0]);
 
       if (editId) {
         try {
@@ -67,6 +72,7 @@ export default function DescidaScreen() {
           const r = await api.getRequest(editId);
           setDate(fromISODate(r.date));
           setTime(timeToDate(r.time));
+          setBoat(r.boat_name || boatList[0] || null);
           setReturnDate(fromISODate(r.expected_return_date));
           setReturnTime(timeToDate(r.expected_return_time));
           setDestination(r.destination || '');
@@ -82,10 +88,12 @@ export default function DescidaScreen() {
     })();
   }, [editId, router]);
 
+  const boatOptions = user?.boats && user.boats.length ? user.boats : user ? [user.boat_name] : [];
+
   const handleSubmit = async () => {
     setError(null);
     if (!user) return;
-    if (!date || !time || !returnDate || !returnTime || !destination || !passengers || !responsible) {
+    if (!date || !time || !boat || !returnDate || !returnTime || !destination || !passengers || !responsible) {
       setError('Preencha todos os campos obrigatórios.');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       return;
@@ -95,6 +103,7 @@ export default function DescidaScreen() {
       cpf: user.cpf,
       date: toISODate(date),
       time: DateHelpers.formatTime(time),
+      boat_name: boat,
       expected_return_date: toISODate(returnDate),
       expected_return_time: DateHelpers.formatTime(returnTime),
       destination,
@@ -148,6 +157,15 @@ export default function DescidaScreen() {
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
+            <SelectField
+              testID="descida-boat-select"
+              label="Lancha"
+              value={boat}
+              options={boatOptions}
+              onChange={setBoat}
+              placeholder="Selecione a lancha"
+            />
+
             <View style={styles.row}>
               <View style={{ flex: 1 }}>
                 <DateField

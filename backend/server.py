@@ -50,6 +50,7 @@ class User(BaseModel):
     name: str
     phone: str
     boat_name: str
+    boats: List[str] = []
     is_admin: bool = False
 
 
@@ -65,6 +66,8 @@ class RequestBase(BaseModel):
     date: str
     # Time in HH:MM 24h
     time: str
+    # Selected boat for this request
+    boat_name: Optional[str] = None
     # Optional fields — only for descida
     expected_return_date: Optional[str] = None
     expected_return_time: Optional[str] = None
@@ -84,6 +87,7 @@ class RequestCreate(RequestBase):
 class RequestUpdate(BaseModel):
     date: Optional[str] = None
     time: Optional[str] = None
+    boat_name: Optional[str] = None
     expected_return_date: Optional[str] = None
     expected_return_time: Optional[str] = None
     destination: Optional[str] = None
@@ -175,7 +179,7 @@ async def create_request(payload: RequestCreate):
     doc = payload.dict()
     doc["id"] = str(uuid.uuid4())
     doc["user_name"] = user["name"]
-    doc["boat_name"] = user["boat_name"]
+    doc["boat_name"] = payload.boat_name or user.get("boat_name")
     doc["created_at"] = now_iso
     doc["updated_at"] = now_iso
     await db.requests.insert_one(doc)
@@ -277,10 +281,10 @@ async def delete_request(request_id: str):
 
 # ===================== Seed =====================
 SEED_USERS = [
-    {"cpf": "11111111111", "name": "João Silva", "phone": "(48) 99999-1111", "boat_name": "Netuno", "is_admin": False},
-    {"cpf": "22222222222", "name": "Maria Santos", "phone": "(48) 99999-2222", "boat_name": "Poseidon", "is_admin": False},
-    {"cpf": "33333333333", "name": "Carlos Oliveira", "phone": "(48) 99999-3333", "boat_name": "Aurora", "is_admin": False},
-    {"cpf": "00000000000", "name": "Administração Marina", "phone": "(48) 3000-0000", "boat_name": "Marina Pararanga", "is_admin": True},
+    {"cpf": "11111111111", "name": "João Silva", "phone": "(48) 99999-1111", "boat_name": "Netuno", "boats": ["Netuno"], "is_admin": False},
+    {"cpf": "22222222222", "name": "Maria Santos", "phone": "(48) 99999-2222", "boat_name": "Poseidon", "boats": ["Poseidon", "Sereia", "Vento Sul"], "is_admin": False},
+    {"cpf": "33333333333", "name": "Carlos Oliveira", "phone": "(48) 99999-3333", "boat_name": "Aurora", "boats": ["Aurora", "Estrela do Mar"], "is_admin": False},
+    {"cpf": "00000000000", "name": "Administração Marina", "phone": "(48) 3000-0000", "boat_name": "Marina Pararanga", "boats": [], "is_admin": True},
 ]
 
 

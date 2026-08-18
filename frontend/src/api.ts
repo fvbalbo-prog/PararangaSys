@@ -5,6 +5,7 @@ export type User = {
   name: string;
   phone: string;
   boat_name: string;
+  boats?: string[];
   is_admin?: boolean;
 };
 

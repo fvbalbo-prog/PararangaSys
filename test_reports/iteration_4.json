@@ -1,0 +1,41 @@
+{
+  "summary": "Iteration 4 features fully verified end-to-end. Backend: 35/35 pytest tests pass (10 new for iteration 4 + 25 regression). Login returns boats array (Maria=[Poseidon,Sereia,Vento Sul], Carlos=[Aurora,Estrela do Mar], João=[Netuno], Admin=[]). POST/PUT /api/requests accept and persist boat_name and observation for both descida and subida. Frontend (375x667 mobile viewport): (1) Maria's Solicitar Descida — descida-boat-select opens modal listing exactly 3 boats (Poseidon/Sereia/Vento Sul) and selecting Sereia updates the field label. (2) Maria's Solicitar Subida — subida-boat-select shows 3 options and Vento Sul selection works. (3) subida-observation-input exists, accepts text, value round-trips correctly. (4) João (1 boat) opens Descida with boat pre-selected to 'Netuno'. (5) Admin (00000000000) is redirected to Painel da Marina and the mode-quadro toggle renders a Lancha/Descida/Subida table with 19 rows for today; first row 'Aurora | 09:00 | 14:00' and rows with '*' correctly mark expected-return times (e.g., 'Netuno 09:00 14:00*'). (6) Toggle back to mode-lista shows the 35-row detailed list. (7) Alterar Descida (Maria) shows requests with boat names (e.g., 'Aurora', 'Netuno') proving item.boat_name reflects the selected boat. No regressions detected on cancel/confirm-return/history/day endpoints.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_marina_iteration4.py",
+    "/app/backend/tests/test_marina_new_features.py",
+    "/app/backend/tests/test_marina_api.py",
+    "/app/test_reports/pytest/pytest_results.xml",
+    "/app/test_reports/pytest/iteration4_results.xml"
+  ],
+  "action_items": [
+    "No action required for iteration 4 features — everything works as specified.",
+    "(Carry-over from iteration 3) admin filter chips (filter-todas/descida/subida) were reported broken on react-native-web due to ScrollView pointer capture; not in scope for this iteration but still worth verifying if not already fixed."
+  ],
+  "critical_code_review_comments": [
+    "server.py:182 correctly falls back to user.boat_name when payload.boat_name is None — good defensive default so legacy clients that don't send boat_name still work.",
+    "descida.tsx:66-67 / subida.tsx:61-62 both compute boatList = u.boats || [u.boat_name] and pre-select boatList[0] on create-mode — clean approach that gracefully handles single-boat clients (dropdown still opens but shows only 1 option).",
+    "SelectField uses Modal + Pressable options which works correctly on react-native-web (unlike the horizontal ScrollView filter chips from iteration 3).",
+    "admin.tsx quadroRows builds each row by joining today's descidas with matching subidas by boat_name — clean single-pass computation; asterisk clearly distinguishes real subida requests from expected-return placeholders.",
+    "RequestBase model correctly makes boat_name and observation optional so both types can share the same schema.",
+    "server.py update_request re-validates the merged doc via validate_request_payload — ensures partial PUT can't produce an invalid state."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_marina_iteration4.py (new)"
+  ],
+  "success_rate": {
+    "backend": "100% (35/35 pytest)",
+    "frontend": "100% (all 9 scenarios in review request verified)"
+  },
+  "seed_data_creation": "Test suite created ~10 additional descida/subida requests today for CPFs 11111111111, 22222222222, 33333333333 with boat_name and observation fields populated. Test data prefixed with TEST_. Admin panel showed 19 descidas / 14 subidas / 4 retornos after the run.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "SelectField options render with testID pattern `{parent-testID}-option-{value}` e.g. `descida-boat-select-option-Sereia`. Login button testID is `login-submit-button` (NOT `login-button`). Home logout testID is `logout-button`. Admin logout testID is `admin-logout`. Admin mode toggle: `mode-lista` / `mode-quadro`. Quadro rows: `quadro-row-{id}`. Admin list rows: `admin-row-{id}`. Alterar rows: `alterar-row-{id}` with `cancel-request-{id}` and `confirm-return-{id}` actions.",
+  "rca_of_issue": "N/A — no bugs found in iteration 4 scope."
+}

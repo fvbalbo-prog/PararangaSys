@@ -8,6 +8,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -16,6 +17,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { DateField, DateHelpers } from '@/src/components/DateField';
+import { SelectField } from '@/src/components/SelectField';
 import { api } from '@/src/api';
 import type { User } from '@/src/api';
 
@@ -47,12 +49,17 @@ export default function SubidaScreen() {
 
   const [date, setDate] = useState<Date | null>(null);
   const [time, setTime] = useState<Date | null>(null);
+  const [boat, setBoat] = useState<string | null>(null);
+  const [observation, setObservation] = useState('');
 
   useEffect(() => {
     (async () => {
       const raw = await AsyncStorage.getItem('user');
       if (!raw) return router.replace('/');
-      setUser(JSON.parse(raw));
+      const u: User = JSON.parse(raw);
+      setUser(u);
+      const boatList = u.boats && u.boats.length ? u.boats : [u.boat_name];
+      if (!editId && boatList.length) setBoat(boatList[0]);
 
       if (editId) {
         try {
@@ -60,6 +67,8 @@ export default function SubidaScreen() {
           const r = await api.getRequest(editId);
           setDate(fromISODate(r.date));
           setTime(timeToDate(r.time));
+          setBoat(r.boat_name || boatList[0] || null);
+          setObservation(r.observation || '');
         } catch (e: any) {
           setError(e.message);
         } finally {
@@ -69,11 +78,13 @@ export default function SubidaScreen() {
     })();
   }, [editId, router]);
 
+  const boatOptions = user?.boats && user.boats.length ? user.boats : user ? [user.boat_name] : [];
+
   const handleSubmit = async () => {
     setError(null);
     if (!user) return;
-    if (!date || !time) {
-      setError('Preencha a data e o horário do retorno.');
+    if (!date || !time || !boat) {
+      setError('Preencha a lancha, a data e o horário do retorno.');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       return;
     }
@@ -82,6 +93,8 @@ export default function SubidaScreen() {
       cpf: user.cpf,
       date: toISODate(date),
       time: DateHelpers.formatTime(time),
+      boat_name: boat,
+      observation,
     };
     try {
       setSaving(true);
@@ -120,13 +133,22 @@ export default function SubidaScreen() {
             <ActivityIndicator color={colors.brandPrimary} />
           </View>
         ) : (
-          <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+          <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
             <View style={styles.infoCard}>
               <Ionicons name="information-circle-outline" size={22} color={colors.brandPrimary} />
               <Text style={styles.infoText}>
                 Informe a data e o horário previstos para o retorno da lancha à marina.
               </Text>
             </View>
+
+            <SelectField
+              testID="subida-boat-select"
+              label="Lancha"
+              value={boat}
+              options={boatOptions}
+              onChange={setBoat}
+              placeholder="Selecione a lancha"
+            />
 
             <View style={styles.row}>
               <View style={{ flex: 1 }}>
@@ -151,6 +173,21 @@ export default function SubidaScreen() {
                   maxTime={{ h: 17, m: 30 }}
                 />
               </View>
+            </View>
+
+            <View style={{ marginTop: spacing.sm }}>
+              <Text style={styles.fieldLabel}>Observação</Text>
+              <TextInput
+                testID="subida-observation-input"
+                style={[styles.input, styles.textarea]}
+                value={observation}
+                onChangeText={setObservation}
+                placeholder="Detalhes adicionais (opcional)"
+                placeholderTextColor={colors.onSurfaceTertiary}
+                multiline
+                numberOfLines={4}
+                textAlignVertical="top"
+              />
             </View>
 
             {error ? (
@@ -193,6 +230,18 @@ const styles = StyleSheet.create({
   subtitle: { color: colors.onSurfaceSecondary, fontSize: typography.sm, marginTop: 2 },
   content: { padding: spacing.lg, paddingBottom: 120 },
   row: { flexDirection: 'row' },
+  fieldLabel: { color: colors.onSurface, fontSize: typography.base, fontWeight: '600', marginBottom: spacing.sm },
+  input: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
+    fontSize: typography.lg,
+    color: colors.onSurface,
+    backgroundColor: colors.surfaceSecondary,
+  },
+  textarea: { minHeight: 100 },
   infoCard: {
     flexDirection: 'row',
     alignItems: 'center',
