@@ -23,6 +23,7 @@ const ITEMS: Item[] = [
   { id: 'conv', title: 'Conveniência', subtitle: 'Produtos e serviços da marina', icon: 'cart-outline', route: '/conveniencia', testID: 'menu-conveniencia', color: '#0E7490' },
   { id: 'autoriz', title: 'Autorizar Entrada', subtitle: 'Liberar terceiros a usar a lancha', icon: 'shield-checkmark-outline', route: '/autorizar', testID: 'menu-autorizar', color: '#4D7C0F' },
   { id: 'emerg', title: 'Emergência', subtitle: 'Acionar socorro e contatos', icon: 'alert-circle-outline', route: '/emergencia', testID: 'menu-emergencia', color: colors.error },
+  { id: 'fatura', title: 'Minha Fatura', subtitle: 'Consumo e cobrança mensal', icon: 'receipt-outline', route: '/fatura', testID: 'menu-fatura', color: '#7C3AED' },
 ];
 
 export default function MenuScreen() {

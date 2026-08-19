@@ -13,7 +13,13 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
 import uuid
-from datetime import datetime, timezone, time
+from datetime import datetime, timezone, time, date as date_cls, timedelta
+
+BR_TZ = timezone(timedelta(hours=-3))
+
+
+def now_br() -> datetime:
+    return datetime.now(BR_TZ)
 
 
 ROOT_DIR = Path(__file__).parent
@@ -122,6 +128,7 @@ class User(BaseModel):
     boats: List[Boat] = []
     is_admin: bool = False
     is_staff: bool = False
+    active: bool = True
 
 
 class LoginInput(BaseModel):
@@ -242,6 +249,27 @@ def validate_request_payload(payload: RequestBase):
     if t.minute not in (0, 30):
         raise HTTPException(status_code=400, detail="Horário deve ser de meia em meia hora (ex.: 08:30, 09:00).")
 
+    # Janela de agendamento: apenas hoje ou amanhã, com no mínimo 1h de antecedência
+    try:
+        y, mo, d = map(int, payload.date.split("-"))
+        req_date = date_cls(y, mo, d)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Data inválida.")
+    now = now_br()
+    delta_days = (req_date - now.date()).days
+    if delta_days < 0 or delta_days > 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Agendamento permitido apenas para hoje ou amanhã.",
+        )
+    scheduled = datetime(y, mo, d, t.hour, t.minute, tzinfo=BR_TZ)
+    if scheduled - now < timedelta(hours=1):
+        acao = "descida" if payload.type == "descida" else "subida"
+        raise HTTPException(
+            status_code=400,
+            detail=f"É necessário solicitar a {acao} com no mínimo 1 hora de antecedência.",
+        )
+
     if payload.type == "descida":
         if not (DESCIDA_MIN <= t <= DESCIDA_MAX):
             raise HTTPException(
@@ -291,6 +319,8 @@ async def login(payload: LoginInput):
     for u in candidates:
         up = re.sub(r"\D", "", u.get("phone", ""))
         if up[-4:] == last4:
+            if u.get("active") is False:
+                raise HTTPException(status_code=403, detail="Acesso desativado. Procure a administração da marina.")
             return u
     raise HTTPException(status_code=404, detail="CPF ou celular não confere.")
 
@@ -590,10 +620,26 @@ async def create_client(payload: ClientInput):
         "boats": boats,
         "is_admin": False,
         "is_staff": bool(payload.is_staff),
+        "active": True,
     }
     await db.users.insert_one(doc)
     doc.pop("_id", None)
     return doc
+
+
+class ActiveInput(BaseModel):
+    active: bool
+
+
+@api_router.patch("/users/{cpf}/active", response_model=User)
+async def set_user_active(cpf: str, payload: ActiveInput):
+    cpf_clean = normalize_cpf(cpf)
+    res = await db.users.update_one({"cpf": cpf_clean}, {"$set": {"active": payload.active}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado.")
+    u = await db.users.find_one({"cpf": cpf_clean}, {"_id": 0})
+    u["boats"] = [b if isinstance(b, dict) else {"name": b} for b in u.get("boats", [])]
+    return u
 
 
 @api_router.post("/users/{cpf}/boats", response_model=User)
@@ -808,6 +854,8 @@ class AuthorizationInput(BaseModel):
     boat_name: str
     person_name: str
     date: str  # YYYY-MM-DD
+    can_lower: bool = False
+    service: Optional[str] = None
 
 
 @api_router.post("/authorizations")
@@ -826,6 +874,8 @@ async def create_authorization(payload: AuthorizationInput):
         "boat_name": payload.boat_name,
         "person_name": payload.person_name.strip(),
         "date": payload.date,
+        "can_lower": bool(payload.can_lower),
+        "service": (payload.service or "").strip() or None,
         "status": "ativa",
         "entered_at": None,
         "created_at": now_iso,
@@ -875,9 +925,26 @@ class EmergencyInput(BaseModel):
 class ReboqueInput(BaseModel):
     cpf: str
     boat_name: str
-    distance_nm: float
+    distance_nm: Optional[float] = None
+    client_lat: Optional[float] = None
+    client_lng: Optional[float] = None
     location: Optional[str] = None
     observation: Optional[str] = None
+
+
+# Coordenadas da marina (ponto de partida do reboque) — ajustável
+MARINA_LAT = float(os.environ.get("MARINA_LAT", "-27.5969"))
+MARINA_LNG = float(os.environ.get("MARINA_LNG", "-48.5495"))
+
+
+def haversine_nm(lat1, lon1, lat2, lon2) -> float:
+    from math import radians, sin, cos, asin, sqrt
+    r_km = 6371.0
+    dlat = radians(lat2 - lat1)
+    dlon = radians(lon2 - lon1)
+    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
+    km = 2 * r_km * asin(sqrt(a))
+    return round(km / 1.852, 2)  # km -> milhas náuticas
 
 
 class BillInput(BaseModel):
@@ -915,8 +982,19 @@ def reboque_quote(length_feet: Optional[float], distance_nm: float) -> dict:
 
 
 @api_router.get("/reboque/quote")
-async def reboque_quote_endpoint(length: float, distance: float):
-    return reboque_quote(length, distance)
+async def reboque_quote_endpoint(
+    length: float,
+    distance: Optional[float] = None,
+    client_lat: Optional[float] = None,
+    client_lng: Optional[float] = None,
+):
+    if client_lat is not None and client_lng is not None:
+        dist = haversine_nm(MARINA_LAT, MARINA_LNG, client_lat, client_lng)
+    elif distance is not None:
+        dist = distance
+    else:
+        raise HTTPException(status_code=400, detail="Informe distância ou coordenadas.")
+    return reboque_quote(length, dist)
 
 
 def _boat_length_for(user: dict, boat_name: Optional[str]) -> Optional[float]:
@@ -961,7 +1039,13 @@ async def create_reboque(payload: ReboqueInput):
     if not user:
         raise HTTPException(status_code=404, detail="CPF não cadastrado.")
     length = _boat_length_for(user, payload.boat_name)
-    quote = reboque_quote(length, payload.distance_nm)
+    if payload.client_lat is not None and payload.client_lng is not None:
+        distance = haversine_nm(MARINA_LAT, MARINA_LNG, payload.client_lat, payload.client_lng)
+    elif payload.distance_nm is not None:
+        distance = payload.distance_nm
+    else:
+        raise HTTPException(status_code=400, detail="Informe a localização ou a distância.")
+    quote = reboque_quote(length, distance)
     now_iso = datetime.now(timezone.utc).isoformat()
     doc = {
         "id": str(uuid.uuid4()),
@@ -970,6 +1054,8 @@ async def create_reboque(payload: ReboqueInput):
         "user_name": user["name"],
         "phone": user.get("phone"),
         "boat_name": payload.boat_name,
+        "client_lat": payload.client_lat,
+        "client_lng": payload.client_lng,
         "location": payload.location,
         "observation": payload.observation,
         "status": "aberta",
@@ -1021,19 +1107,21 @@ async def resolve_emergency(eid: str):
 
 # ===================== Relatório de consumo (cobrança mensal) =====================
 @api_router.get("/reports/consumo")
-async def consumo_report(month: Optional[str] = None):
+async def consumo_report(month: Optional[str] = None, cpf: Optional[str] = None):
     """month = YYYY-MM. Agrupa por cliente o consumo de conveniência (pedidos
     não cancelados) e reboques faturados (billed_amount) no mês."""
     if not month:
         now = datetime.now(timezone.utc)
         month = f"{now.year}-{now.month:02d}"
 
-    orders = await db.convenience_orders.find(
-        {"status": {"$ne": "cancelada"}, "created_at": {"$regex": f"^{month}"}}, {"_id": 0}
-    ).to_list(5000)
-    reboques = await db.emergencies.find(
-        {"kind": "reboque", "billed_amount": {"$ne": None}, "billed_at": {"$regex": f"^{month}"}}, {"_id": 0}
-    ).to_list(5000)
+    order_q = {"status": {"$ne": "cancelada"}, "created_at": {"$regex": f"^{month}"}}
+    reboque_q = {"kind": "reboque", "billed_amount": {"$ne": None}, "billed_at": {"$regex": f"^{month}"}}
+    if cpf:
+        c = normalize_cpf(cpf)
+        order_q["cpf"] = c
+        reboque_q["cpf"] = c
+    orders = await db.convenience_orders.find(order_q, {"_id": 0}).to_list(5000)
+    reboques = await db.emergencies.find(reboque_q, {"_id": 0}).to_list(5000)
 
     by_client: dict = {}
 
@@ -1077,6 +1165,56 @@ async def consumo_report(month: Optional[str] = None):
     result.sort(key=lambda x: x["total"], reverse=True)
     grand_total = round(sum(b["total"] for b in result), 2)
     return {"month": month, "grand_total": grand_total, "clients": result}
+
+
+# ===================== Fatura / Notificação de cobrança (in-app) =====================
+class StatementSend(BaseModel):
+    cpf: str
+    month: str  # YYYY-MM
+
+
+@api_router.post("/statements/send")
+async def send_statement(payload: StatementSend):
+    cpf = normalize_cpf(payload.cpf)
+    user = await db.users.find_one({"cpf": cpf}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+    report = await consumo_report(month=payload.month, cpf=cpf)
+    client = report["clients"][0] if report["clients"] else {
+        "convenience_total": 0.0, "reboque_total": 0.0, "total": 0.0, "orders": [], "reboques": []
+    }
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "cpf": cpf,
+        "user_name": user["name"],
+        "month": payload.month,
+        "convenience_total": client["convenience_total"],
+        "reboque_total": client["reboque_total"],
+        "total": client["total"],
+        "orders": client["orders"],
+        "reboques": client["reboques"],
+        "read": False,
+        "sent_at": now_iso,
+    }
+    # substitui notificação anterior do mesmo mês
+    await db.statements.delete_many({"cpf": cpf, "month": payload.month})
+    await db.statements.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/statements")
+async def list_statements(cpf: Optional[str] = None):
+    query = {"cpf": normalize_cpf(cpf)} if cpf else {}
+    docs = await db.statements.find(query, {"_id": 0}).sort("sent_at", -1).to_list(500)
+    return docs
+
+
+@api_router.patch("/statements/{sid}/read")
+async def read_statement(sid: str):
+    await db.statements.update_one({"id": sid}, {"$set": {"read": True}})
+    return {"ok": True}
 
 
 # ===================== Seed =====================

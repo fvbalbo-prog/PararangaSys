@@ -11,6 +11,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -99,6 +100,29 @@ export default function AdminClientesScreen() {
     }
   };
 
+  const toggleActive = (item: any) => {
+    const next = item.active === false; // reactivate if inactive
+    const action = next ? 'Reativar' : 'Excluir';
+    Alert.alert(
+      `${action} acesso`,
+      next
+        ? `Reativar o acesso de ${item.name}?`
+        : `${item.name} perderá o acesso ao app, mas os registros serão mantidos. Confirmar?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: action,
+          style: next ? 'default' : 'destructive',
+          onPress: async () => {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            setClients((prev) => prev.map((c) => (c.cpf === item.cpf ? { ...c, active: next } : c)));
+            try { await api.setUserActive(item.cpf, next); } catch { load(); }
+          },
+        },
+      ]
+    );
+  };
+
   const removeBoat = async (cpf: string, name: string) => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
     setClients((prev) =>
@@ -160,13 +184,18 @@ export default function AdminClientesScreen() {
           keyExtractor={(c) => c.cpf}
           contentContainerStyle={styles.list}
           renderItem={({ item }) => (
-            <View style={styles.card} testID={`client-card-${item.cpf}`}>
+            <View style={[styles.card, item.active === false && styles.cardInactive]} testID={`client-card-${item.cpf}`}>
               <View style={styles.clientHead}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.clientName}>{item.name}</Text>
                   <Text style={styles.clientMeta}>{formatCpf(item.cpf)} • {item.phone}</Text>
                 </View>
-                {item.is_staff ? (
+                {item.active === false ? (
+                  <View style={[styles.staffBadge, { backgroundColor: colors.error }]}>
+                    <Ionicons name="ban-outline" size={12} color="#FFFFFF" />
+                    <Text style={styles.staffBadgeText}>Sem acesso</Text>
+                  </View>
+                ) : item.is_staff ? (
                   <View style={styles.staffBadge}>
                     <Ionicons name="briefcase-outline" size={12} color={colors.onBrandPrimary} />
                     <Text style={styles.staffBadgeText}>Funcionário</Text>
@@ -212,6 +241,17 @@ export default function AdminClientesScreen() {
                   </Pressable>
                 </>
               )}
+
+              <Pressable
+                testID={`toggle-active-${item.cpf}`}
+                onPress={() => toggleActive(item)}
+                style={({ pressed }) => [styles.accessBtn, pressed && { opacity: 0.85 }]}
+              >
+                <Ionicons name={item.active === false ? 'lock-open-outline' : 'ban-outline'} size={16} color={item.active === false ? colors.success : colors.error} />
+                <Text style={[styles.accessText, { color: item.active === false ? colors.success : colors.error }]}>
+                  {item.active === false ? 'Reativar acesso' : 'Excluir acesso'}
+                </Text>
+              </Pressable>
             </View>
           )}
         />
@@ -302,6 +342,9 @@ const styles = StyleSheet.create({
   noBoats: { color: colors.onSurfaceTertiary, fontSize: typography.base, fontStyle: 'italic', marginBottom: spacing.sm },
   staffBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.brandPrimary, borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: 4 },
   staffBadgeText: { color: colors.onBrandPrimary, fontSize: typography.sm, fontWeight: '700' },
+  cardInactive: { opacity: 0.6 },
+  accessBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs, marginTop: spacing.md, paddingVertical: spacing.md, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border },
+  accessText: { fontSize: typography.base, fontWeight: '700' },
   roleRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md, backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, padding: spacing.xs },
   roleBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs, paddingVertical: spacing.md, borderRadius: radius.sm },
   roleBtnActive: { backgroundColor: colors.brandPrimary },

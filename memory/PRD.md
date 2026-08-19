@@ -72,6 +72,17 @@ Aplicativo mobile (React Native/Expo) para os proprietários de lanchas da Marin
 ## Backlog (solicitado, ainda pendente)
 - (nenhum pendente)
 
+## Features adicionadas (2026-06 - iteração 11)
+- **Janela de agendamento**: descida/subida apenas para hoje ou amanhã, com mínimo de 1h de antecedência (validado no backend em BR_TZ; frontend limita data e marca slots "Cedo").
+- **Autorizar Entrada**: campos "autorizado a descer a lancha (Sim/Não)" e "serviço a ser realizado".
+- **Login**: removida a frase "Solicitações de descida e subida"; logo +10%.
+- **Conveniência**: confirmação antes de enviar avisando que o valor vai para a fatura mensal.
+- **Reboque via GPS**: `expo-location` obtém a posição do cliente; backend calcula a distância (haversine) até a marina (`MARINA_LAT`/`MARINA_LNG`, default -27.5969/-48.5495) e o valor.
+- **Relatório mensal em PDF** (admin) + **Enviar resumo ao cliente** (`POST /api/statements/send`).
+- **Excluir/Reativar acesso** (soft delete `PATCH /api/users/{cpf}/active`): login bloqueia inativos (403), registros mantidos; funcionários aparecem na lista com selo.
+- **Minha Fatura** (cliente): consumo do mês + resumos enviados pela marina (`/api/statements`).
+- Nota: no preview web os Alerts de confirmação (multi-botão) são silenciosos por limitação do react-native-web; funcionam normalmente no app iOS/Android.
+
 ## Features adicionadas (2026-06 - iteração 10)
 - **Filtro por categoria na loja** (cliente `/conveniencia`): chips Todos/Bebidas/Sorvetes/Açaí/Outros com ícones.
 - **Cadastro de funcionário** (`/admin-clientes`): toggle Cliente/Funcionário; funcionário (`is_staff`) acessa só o painel de funcionário; badge no card. `POST /api/users` aceita `is_staff`; `/api/users` lista funcionários.

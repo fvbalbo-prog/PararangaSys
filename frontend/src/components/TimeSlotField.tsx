@@ -6,6 +6,19 @@ import { api } from '@/src/api';
 import type { SlotInfo, RequestType } from '@/src/api';
 import { tideHeightAt, formatTide, tideColor, type TidePoint } from '@/src/tide';
 
+// Slot com menos de 1h de antecedência (apenas para o dia de hoje) não é permitido
+function isTooSoon(dateStr: string | null, hhmm: string): boolean {
+  if (!dateStr) return false;
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  if (dateStr !== todayStr) return false;
+  const [h, m] = hhmm.split(':').map(Number);
+  const slot = new Date(now);
+  slot.setHours(h || 0, m || 0, 0, 0);
+  return slot.getTime() - now.getTime() < 60 * 60 * 1000;
+}
+
 type Props = {
   label: string;
   type: RequestType;
@@ -91,7 +104,8 @@ export function TimeSlotField({ label, type, date, value, onChange, tidePoints, 
                 {slots.map((s) => {
                   const h = tideHeightAt(tidePoints, s.time);
                   const tc = tideColor(h);
-                  const isFull = !s.available;
+                  const tooSoon = isTooSoon(date, s.time);
+                  const isFull = !s.available || tooSoon;
                   const selected = s.time === value;
                   return (
                     <Pressable
@@ -114,7 +128,7 @@ export function TimeSlotField({ label, type, date, value, onChange, tidePoints, 
                         <Text style={[styles.slotTideText, { color: tc.fg }]}>{formatTide(h)}</Text>
                       </View>
                       <Text style={[styles.slotCount, selected && { color: colors.onBrandPrimary }]}>
-                        {s.unlimited ? 'Livre' : isFull ? 'Lotado' : `${s.count}/3`}
+                        {tooSoon ? 'Cedo' : s.unlimited ? 'Livre' : isFull ? 'Lotado' : `${s.count}/3`}
                       </Text>
                     </Pressable>
                   );

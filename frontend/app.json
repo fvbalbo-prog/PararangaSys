@@ -12,7 +12,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.emergent.lanchascheduler.x60lx1",
       "infoPlist": {
-        "NSPhotoLibraryUsageDescription": "Escolher a foto do produto de conveniência"
+        "NSPhotoLibraryUsageDescription": "Escolher a foto do produto de conveniência",
+        "NSLocationWhenInUseUsageDescription": "Calcular a distância do reboque até a marina"
       }
     },
     "android": {
@@ -45,6 +46,12 @@
         "expo-image-picker",
         {
           "photosPermission": "Escolher a foto do produto de conveniência"
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Calcular a distância do reboque até a marina"
         }
       ]
     ],

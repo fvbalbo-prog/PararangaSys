@@ -93,6 +93,8 @@ export const api = {
   listUsers: () => req<Client[]>('/users'),
   createClient: (data: { cpf: string; name: string; phone: string; boats: Boat[]; is_staff?: boolean }) =>
     req<Client>('/users', { method: 'POST', body: JSON.stringify(data) }),
+  setUserActive: (cpf: string, active: boolean) =>
+    req<Client>(`/users/${cpf}/active`, { method: 'PATCH', body: JSON.stringify({ active }) }),
   addBoat: (cpf: string, boat: { name: string; draft?: number | null; length?: number | null }) =>
     req<Client>(`/users/${cpf}/boats`, { method: 'POST', body: JSON.stringify(boat) }),
   removeBoat: (cpf: string, boat: string) =>
@@ -131,7 +133,7 @@ export const api = {
   setOrderStatus: (id: string, status: OrderStatus) =>
     req<ConvenienceOrder>(`/convenience/orders/${id}/status?status=${status}`, { method: 'PATCH' }),
   // Autorizações
-  createAuthorization: (data: { cpf: string; boat_name: string; person_name: string; date: string }) =>
+  createAuthorization: (data: { cpf: string; boat_name: string; person_name: string; date: string; can_lower?: boolean; service?: string | null }) =>
     req<Authorization>('/authorizations', { method: 'POST', body: JSON.stringify(data) }),
   listAuthorizations: (cpf?: string) =>
     req<Authorization[]>(`/authorizations${cpf ? `?cpf=${cpf}` : ''}`),
@@ -142,9 +144,14 @@ export const api = {
   // Emergências
   createEmergency: (data: { cpf: string; boat_name?: string | null; location?: string | null; observation?: string | null }) =>
     req<Emergency>('/emergencies', { method: 'POST', body: JSON.stringify(data) }),
-  reboqueQuote: (length: number, distance: number) =>
-    req<ReboqueQuote>(`/reboque/quote?length=${length}&distance=${distance}`),
-  createReboque: (data: { cpf: string; boat_name: string; distance_nm: number; location?: string | null; observation?: string | null }) =>
+  reboqueQuote: (params: { length: number; distance?: number; client_lat?: number; client_lng?: number }) => {
+    const qs = new URLSearchParams({ length: String(params.length) });
+    if (params.distance != null) qs.set('distance', String(params.distance));
+    if (params.client_lat != null) qs.set('client_lat', String(params.client_lat));
+    if (params.client_lng != null) qs.set('client_lng', String(params.client_lng));
+    return req<ReboqueQuote>(`/reboque/quote?${qs.toString()}`);
+  },
+  createReboque: (data: { cpf: string; boat_name: string; distance_nm?: number; client_lat?: number; client_lng?: number; location?: string | null; observation?: string | null }) =>
     req<Emergency>('/reboque', { method: 'POST', body: JSON.stringify(data) }),
   billEmergency: (id: string, amount: number) =>
     req<Emergency>(`/emergencies/${id}/bill`, { method: 'PATCH', body: JSON.stringify({ amount }) }),
@@ -157,8 +164,17 @@ export const api = {
   },
   resolveEmergency: (id: string) =>
     req<Emergency>(`/emergencies/${id}/resolve`, { method: 'PATCH' }),
-  consumoReport: (month?: string) =>
-    req<ConsumoReport>(`/reports/consumo${month ? `?month=${month}` : ''}`),
+  consumoReport: (month?: string, cpf?: string) => {
+    const qs = new URLSearchParams();
+    if (month) qs.set('month', month);
+    if (cpf) qs.set('cpf', cpf);
+    const s = qs.toString();
+    return req<ConsumoReport>(`/reports/consumo${s ? `?${s}` : ''}`);
+  },
+  sendStatement: (cpf: string, month: string) =>
+    req<Statement>('/statements/send', { method: 'POST', body: JSON.stringify({ cpf, month }) }),
+  listStatements: (cpf?: string) => req<Statement[]>(`/statements${cpf ? `?cpf=${cpf}` : ''}`),
+  readStatement: (id: string) => req<{ ok: boolean }>(`/statements/${id}/read`, { method: 'PATCH' }),
 };
 
 export type Product = { id: string; name: string; price: number; active: boolean; in_stock: boolean; category: string; image_url?: string | null };
@@ -191,6 +207,8 @@ export type Authorization = {
   boat_name: string;
   person_name: string;
   date: string;
+  can_lower?: boolean;
+  service?: string | null;
   status: 'ativa' | 'cancelada';
   entered_at?: string | null;
   created_at: string;
@@ -241,6 +259,20 @@ export type ConsumoClient = {
 };
 export type ConsumoReport = { month: string; grand_total: number; clients: ConsumoClient[] };
 
+export type Statement = {
+  id: string;
+  cpf: string;
+  user_name: string;
+  month: string;
+  convenience_total: number;
+  reboque_total: number;
+  total: number;
+  orders: { id: string; total: number; created_at: string; items: { name: string; qty: number }[] }[];
+  reboques: { id: string; amount: number; boat_name?: string | null }[];
+  read: boolean;
+  sent_at: string;
+};
+
 export type SlotInfo = {
   time: string;
   count: number;
@@ -258,4 +290,5 @@ export type Client = {
   boats: Boat[];
   boat_name?: string;
   is_staff?: boolean;
+  active?: boolean;
 };

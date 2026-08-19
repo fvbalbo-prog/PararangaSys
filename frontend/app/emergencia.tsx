@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -10,34 +10,24 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
+import * as Location from 'expo-location';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { SelectField } from '@/src/components/SelectField';
 import { api, boatName } from '@/src/api';
-import type { User, Emergency, Boat } from '@/src/api';
+import type { User, Emergency, Boat, ReboqueQuote } from '@/src/api';
 
 import { formatMoney as money } from '@/src/format';
 
 function formatDateTime(iso: string) {
   const d = new Date(iso);
   return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-}
-
-// Espelha a tabela do backend
-function reboqueQuote(lengthFeet: number | null | undefined, distanceNm: number) {
-  const feet = lengthFeet || 0;
-  let base = 2500, perNm = 250;
-  if (feet <= 25) { base = 1200; perNm = 120; }
-  else if (feet <= 35) { base = 1800; perNm = 180; }
-  const additionalNm = Math.max(0, distanceNm - 5);
-  const additionalFee = Math.round(additionalNm * perNm * 100) / 100;
-  const total = Math.round((base + additionalFee) * 100) / 100;
-  return { base, perNm, additionalNm, additionalFee, total };
 }
 
 function boatLength(boats: Boat[] | undefined, name: string | null): number | null {
@@ -56,10 +46,11 @@ export default function EmergenciaScreen() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
 
-  // reboque
+  // reboque (GPS)
   const [boat, setBoat] = useState<string | null>(null);
-  const [distance, setDistance] = useState('');
-  const [rebLocation, setRebLocation] = useState('');
+  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [quote, setQuote] = useState<ReboqueQuote | null>(null);
+  const [locating, setLocating] = useState(false);
   const [rebObs, setRebObs] = useState('');
 
   const loadList = useCallback(async (cpf: string) => {
@@ -86,11 +77,57 @@ export default function EmergenciaScreen() {
 
   const boatOptions = user?.boats && user.boats.length ? user.boats.map(boatName) : user ? [user.boat_name] : [];
   const selectedLength = boatLength(user?.boats, boat);
-  const distNum = parseFloat(distance.replace(',', '.'));
-  const quote = useMemo(
-    () => (!isNaN(distNum) && distNum > 0 ? reboqueQuote(selectedLength, distNum) : null),
-    [selectedLength, distNum]
-  );
+
+  const fetchQuote = useCallback(async (lat: number, lng: number) => {
+    try {
+      const q = await api.reboqueQuote({ length: selectedLength ?? 999, client_lat: lat, client_lng: lng });
+      setQuote(q);
+    } catch {
+      setQuote(null);
+    }
+  }, [selectedLength]);
+
+  const getLocation = async () => {
+    Haptics.selectionAsync();
+    const perm = await Location.getForegroundPermissionsAsync();
+    let status = perm.status;
+    if (status !== 'granted') {
+      if (perm.canAskAgain) {
+        const req = await Location.requestForegroundPermissionsAsync();
+        status = req.status;
+      }
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permissão necessária',
+          'Precisamos da sua localização para calcular a distância do reboque.',
+          [
+            { text: 'Cancelar', style: 'cancel' },
+            { text: 'Abrir Ajustes', onPress: () => Linking.openSettings() },
+          ]
+        );
+        return;
+      }
+    }
+    try {
+      setLocating(true);
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const lat = pos.coords.latitude;
+      const lng = pos.coords.longitude;
+      setCoords({ lat, lng });
+      await fetchQuote(lat, lng);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch {
+      Alert.alert('Erro', 'Não foi possível obter sua localização.');
+    } finally {
+      setLocating(false);
+    }
+  };
+
+  // Recalcula ao trocar de lancha (se já tem localização)
+  useEffect(() => {
+    if (coords) fetchQuote(coords.lat, coords.lng);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boat]);
 
   const dispatchSocorro = async () => {
     if (!user) return;
@@ -129,19 +166,19 @@ export default function EmergenciaScreen() {
   };
 
   const dispatchReboque = async () => {
-    if (!user || !boat || !quote) return;
+    if (!user || !boat || !coords) return;
     try {
       setSending(true);
       await api.createReboque({
         cpf: user.cpf,
         boat_name: boat,
-        distance_nm: distNum,
-        location: rebLocation.trim() || null,
+        client_lat: coords.lat,
+        client_lng: coords.lng,
         observation: rebObs.trim() || null,
       });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setDistance('');
-      setRebLocation('');
+      setCoords(null);
+      setQuote(null);
       setRebObs('');
       await loadList(user.cpf);
       Alert.alert('Reboque solicitado', 'A equipe da marina foi notificada. O valor final será lançado na sua conta.');
@@ -154,11 +191,11 @@ export default function EmergenciaScreen() {
 
   const confirmReboque = () => {
     if (!boat) { Alert.alert('Selecione a lancha'); return; }
-    if (!quote) { Alert.alert('Informe a distância', 'Digite a distância em milhas náuticas.'); return; }
+    if (!coords || !quote) { Alert.alert('Localização necessária', 'Toque em "Usar minha localização" para calcular a distância.'); return; }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     Alert.alert(
       'Confirmar reboque?',
-      `Valor estimado: ${money(quote.total)}\n\nApós a confirmação, a equipe será acionada e o valor final será lançado na sua conta.`,
+      `Distância: ${quote.distance_nm} MN\nValor estimado: ${money(quote.estimated_total)}\n\nApós a confirmação, a equipe será acionada e o valor final será lançado na sua conta.`,
       [
         { text: 'Cancelar', style: 'cancel' },
         { text: 'Confirmar', onPress: dispatchReboque },
@@ -222,25 +259,21 @@ export default function EmergenciaScreen() {
                 <Text style={styles.hint}>
                   {selectedLength != null ? `Comprimento: ${selectedLength} pés` : 'Comprimento não cadastrado — usando maior faixa.'}
                 </Text>
-                <View style={styles.fieldGroup}>
-                  <Text style={styles.label}>Distância total (milhas náuticas)</Text>
-                  <TextInput testID="reboque-distance" style={styles.input} value={distance} onChangeText={(v) => setDistance(v.replace(/[^\d.,]/g, ''))} placeholder="Ex.: 8" placeholderTextColor={colors.onSurfaceTertiary} keyboardType="decimal-pad" />
-                  <Text style={styles.hint}>As primeiras 5 MN estão inclusas na taxa de atendimento.</Text>
-                </View>
+                <Pressable testID="reboque-location-button" onPress={getLocation} disabled={locating} style={({ pressed }) => [styles.gpsBtn, pressed && { opacity: 0.9 }]}>
+                  {locating ? <ActivityIndicator color={colors.brandPrimary} /> : <><Ionicons name="navigate" size={18} color={colors.brandPrimary} /><Text style={styles.gpsBtnText}>{coords ? 'Atualizar minha localização' : 'Usar minha localização'}</Text></>}
+                </Pressable>
+                <Text style={styles.hint}>Usamos seu GPS para calcular a distância até a marina. As primeiras 5 MN estão inclusas.</Text>
 
                 {quote ? (
                   <View style={styles.quoteCard} testID="reboque-quote">
-                    <View style={styles.quoteRow}><Text style={styles.quoteLabel}>Taxa de atendimento (até 5 MN)</Text><Text style={styles.quoteVal}>{money(quote.base)}</Text></View>
-                    <View style={styles.quoteRow}><Text style={styles.quoteLabel}>Adicional ({quote.additionalNm} MN × {money(quote.perNm)})</Text><Text style={styles.quoteVal}>{money(quote.additionalFee)}</Text></View>
+                    <View style={styles.quoteRow}><Text style={styles.quoteLabel}>Distância</Text><Text style={styles.quoteVal}>{quote.distance_nm} MN</Text></View>
+                    <View style={styles.quoteRow}><Text style={styles.quoteLabel}>Taxa de atendimento (até 5 MN)</Text><Text style={styles.quoteVal}>{money(quote.base_fee)}</Text></View>
+                    <View style={styles.quoteRow}><Text style={styles.quoteLabel}>Adicional ({quote.additional_nm} MN × {money(quote.per_nm)})</Text><Text style={styles.quoteVal}>{money(quote.additional_fee)}</Text></View>
                     <View style={styles.quoteDivider} />
-                    <View style={styles.quoteRow}><Text style={styles.quoteTotalLabel}>Valor estimado</Text><Text style={styles.quoteTotalVal} testID="reboque-total">{money(quote.total)}</Text></View>
+                    <View style={styles.quoteRow}><Text style={styles.quoteTotalLabel}>Valor estimado</Text><Text style={styles.quoteTotalVal} testID="reboque-total">{money(quote.estimated_total)}</Text></View>
                   </View>
                 ) : null}
 
-                <View style={styles.fieldGroup}>
-                  <Text style={styles.label}>Localização (opcional)</Text>
-                  <TextInput testID="reboque-location" style={styles.input} value={rebLocation} onChangeText={setRebLocation} placeholder="Onde você está?" placeholderTextColor={colors.onSurfaceTertiary} />
-                </View>
                 <View style={styles.fieldGroup}>
                   <Text style={styles.label}>Observação (opcional)</Text>
                   <TextInput testID="reboque-observation" style={[styles.input, styles.textarea]} value={rebObs} onChangeText={setRebObs} placeholder="Detalhes da situação" placeholderTextColor={colors.onSurfaceTertiary} multiline textAlignVertical="top" />
@@ -314,6 +347,8 @@ const styles = StyleSheet.create({
   quoteTotalVal: { color: colors.brandPrimary, fontSize: typography.xl, fontWeight: '800' },
   reboqueBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, backgroundColor: colors.brandPrimary, paddingVertical: spacing.lg, borderRadius: radius.md },
   reboqueBtnText: { color: '#FFFFFF', fontSize: typography.lg, fontWeight: '700' },
+  gpsBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, borderWidth: 1.5, borderColor: colors.brandPrimary, paddingVertical: spacing.lg, borderRadius: radius.md, backgroundColor: colors.surfaceSecondary, marginTop: spacing.sm },
+  gpsBtnText: { color: colors.brandPrimary, fontSize: typography.lg, fontWeight: '700' },
   sectionLabel: { color: colors.brandPrimary, fontWeight: '700', fontSize: typography.sm, letterSpacing: 1, textTransform: 'uppercase', marginBottom: spacing.md, marginTop: spacing.xl },
   card: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.lg, marginBottom: spacing.sm },
   dot: { width: 10, height: 10, borderRadius: 5 },

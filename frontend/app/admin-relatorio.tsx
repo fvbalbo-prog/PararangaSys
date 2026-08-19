@@ -4,6 +4,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+import { Alert } from 'react-native';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { api } from '@/src/api';
 import type { ConsumoReport, ConsumoClient } from '@/src/api';
@@ -48,6 +51,59 @@ export default function AdminRelatorioScreen() {
     setExpanded(null);
   };
 
+  const sendStatement = async (cpf: string, name: string) => {
+    try {
+      await api.sendStatement(cpf, monthStr);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert('Resumo enviado', `${name} receberá o resumo de consumo no app.`);
+    } catch (e: any) {
+      Alert.alert('Erro', e.message || 'Falha ao enviar o resumo.');
+    }
+  };
+
+  const generatePdf = async () => {
+    if (!report || report.clients.length === 0) {
+      Alert.alert('Sem dados', 'Não há consumo neste mês.');
+      return;
+    }
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      const rows = report.clients
+        .map(
+          (c) => `<tr>
+            <td class="b">${c.name}</td>
+            <td class="r">${money(c.convenience_total)}</td>
+            <td class="r">${money(c.reboque_total)}</td>
+            <td class="r"><strong>${money(c.total)}</strong></td>
+          </tr>`
+        )
+        .join('');
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><style>
+        *{font-family:-apple-system,Helvetica,Arial,sans-serif;} body{padding:28px;color:#0B2545;}
+        h1{font-size:22px;margin:0;} h2{font-size:15px;color:#475569;margin:4px 0 18px;font-weight:500;}
+        table{width:100%;border-collapse:collapse;margin-top:10px;} th{background:#0B2545;color:#fff;text-align:left;padding:10px;font-size:13px;}
+        th.r,td.r{text-align:right;} td{padding:10px;border-bottom:1px solid #E2E8F0;font-size:14px;} td.b{font-weight:700;}
+        tfoot td{border-top:2px solid #0B2545;font-size:15px;font-weight:800;} .foot{margin-top:16px;font-size:11px;color:#94A3B8;}
+      </style></head><body>
+        <h1>Marina Pararanga — Relatório de Consumo</h1>
+        <h2>${MONTHS[month - 1]} / ${year}</h2>
+        <table><thead><tr><th>Cliente</th><th class="r">Conveniência</th><th class="r">Reboque</th><th class="r">Total</th></tr></thead>
+        <tbody>${rows}</tbody>
+        <tfoot><tr><td>TOTAL GERAL</td><td class="r"></td><td class="r"></td><td class="r">${money(report.grand_total)}</td></tr></tfoot>
+        </table>
+        <p class="foot">Gerado em ${new Date().toLocaleString('pt-BR')}.</p>
+      </body></html>`;
+      const { uri } = await Print.printToFileAsync({ html });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Relatório de consumo' });
+      } else {
+        await Print.printAsync({ uri });
+      }
+    } catch {
+      Alert.alert('Erro', 'Não foi possível gerar o PDF.');
+    }
+  };
+
   const renderClient = ({ item }: { item: ConsumoClient }) => {
     const open = expanded === item.cpf;
     return (
@@ -85,6 +141,10 @@ export default function AdminRelatorioScreen() {
                 <Text style={styles.detailVal}>{money(r.amount)}</Text>
               </View>
             ))}
+            <Pressable testID={`enviar-resumo-${item.cpf}`} onPress={() => sendStatement(item.cpf, item.name)} style={styles.sendBtn}>
+              <Ionicons name="paper-plane-outline" size={16} color="#FFFFFF" />
+              <Text style={styles.sendBtnText}>Enviar resumo ao cliente</Text>
+            </Pressable>
           </View>
         ) : null}
       </Pressable>
@@ -101,6 +161,9 @@ export default function AdminRelatorioScreen() {
           <Text style={styles.kicker}>COBRANÇA MENSAL</Text>
           <Text style={styles.title} testID="relatorio-title">Consumo por Cliente</Text>
         </View>
+        <Pressable onPress={generatePdf} hitSlop={12} testID="relatorio-pdf" style={styles.backBtn}>
+          <Ionicons name="print-outline" size={22} color={colors.onBrandPrimary} />
+        </Pressable>
       </View>
 
       <View style={styles.sheet}>
@@ -163,4 +226,6 @@ const styles = StyleSheet.create({
   detailRow: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.md },
   detailText: { color: colors.onSurfaceSecondary, fontSize: typography.sm, flex: 1 },
   detailVal: { color: colors.onSurface, fontSize: typography.sm, fontWeight: '700' },
+  sendBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs, backgroundColor: colors.brandPrimary, paddingVertical: spacing.md, borderRadius: radius.sm, marginTop: spacing.sm },
+  sendBtnText: { color: '#FFFFFF', fontSize: typography.base, fontWeight: '700' },
 });

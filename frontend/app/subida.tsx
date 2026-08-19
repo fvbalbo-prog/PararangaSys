@@ -169,6 +169,7 @@ export default function SubidaScreen() {
                   value={date}
                   onChange={(d) => { setDate(d); setBookingTime(null); }}
                   minimumDate={new Date()}
+                  maximumDate={new Date(Date.now() + 24 * 60 * 60 * 1000)}
                 />
               </View>
               <View style={{ width: spacing.md }} />

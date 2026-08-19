@@ -70,7 +70,6 @@ export default function LoginScreen() {
               tintColor="#FFFFFF"
               testID="brand-logo"
             />
-            <Text style={styles.heroTagline}>Solicitações de descida e subida</Text>
           </View>
 
           <View style={styles.form}>
@@ -129,7 +128,7 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.surface },
   hero: { height: '46%', justifyContent: 'center', alignItems: 'center', backgroundColor: colors.brandPrimary },
-  logoOverlay: { width: 300, height: 150 },
+  logoOverlay: { width: 330, height: 165 },
   heroTagline: {
     color: colors.onBrandPrimary,
     opacity: 0.85,

@@ -260,6 +260,7 @@ export default function AdminSolicitacoesScreen() {
                   <Text style={styles.cardMeta}>{fmtDate(item.date)}</Text>
                 </View>
                 <Text style={styles.cardMeta}>Lancha: {item.boat_name} • Titular: {item.user_name}</Text>
+                <Text style={styles.cardMeta}>Descer a lancha: {item.can_lower ? 'Sim' : 'Não'}{item.service ? ` • Serviço: ${item.service}` : ''}</Text>
                 {item.entered_at ? (
                   <View style={styles.enteredTag}>
                     <Ionicons name="log-in-outline" size={14} color={colors.success} />

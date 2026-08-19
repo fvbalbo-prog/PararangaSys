@@ -10,6 +10,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Image,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -90,7 +91,7 @@ export default function ConvenienciaScreen() {
   const selected = products.filter((p) => (qty[p.id] || 0) > 0);
   const total = selected.reduce((sum, p) => sum + p.price * qty[p.id], 0);
 
-  const submit = async () => {
+  const doSubmit = async () => {
     setError(null);
     if (!user || selected.length === 0) {
       setError('Selecione ao menos um produto.');
@@ -110,12 +111,31 @@ export default function ConvenienciaScreen() {
       setQty({});
       setObservation('');
       await loadOrders(user.cpf);
+      Alert.alert('Pedido enviado', 'Seu pedido foi registrado e o valor será cobrado na sua fatura mensal.');
     } catch (e: any) {
       setError(e.message || 'Erro ao enviar pedido.');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
       setSaving(false);
     }
+  };
+
+  const submit = () => {
+    setError(null);
+    if (!user || selected.length === 0) {
+      setError('Selecione ao menos um produto.');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      return;
+    }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    Alert.alert(
+      'Confirmar pedido',
+      `O valor de ${money(total)} será lançado na sua conta e cobrado na fatura mensal. Você concorda?`,
+      [
+        { text: 'Não', style: 'cancel' },
+        { text: 'Sim, concordo', onPress: doSubmit },
+      ]
+    );
   };
 
   return (

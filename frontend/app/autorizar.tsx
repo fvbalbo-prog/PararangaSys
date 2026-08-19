@@ -35,6 +35,8 @@ export default function AutorizarScreen() {
   const [boat, setBoat] = useState<string | null>(null);
   const [personName, setPersonName] = useState('');
   const [date, setDate] = useState<Date | null>(null);
+  const [canLower, setCanLower] = useState(false);
+  const [service, setService] = useState('');
   const [list, setList] = useState<Authorization[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -85,10 +87,14 @@ export default function AutorizarScreen() {
         boat_name: boat,
         person_name: personName.trim(),
         date: toISODate(date),
+        can_lower: canLower,
+        service: service.trim() || null,
       });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setPersonName('');
       setDate(null);
+      setCanLower(false);
+      setService('');
       await loadList(user.cpf);
     } catch (e: any) {
       setError(e.message || 'Erro ao autorizar.');
@@ -153,6 +159,34 @@ export default function AutorizarScreen() {
               minimumDate={new Date()}
             />
 
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Autorizado a descer a lancha?</Text>
+              <View style={styles.toggleRow}>
+                <Pressable testID="autorizar-lower-sim" onPress={() => setCanLower(true)} style={[styles.toggleBtn, canLower && styles.toggleBtnActive]}>
+                  <Ionicons name="checkmark-circle-outline" size={16} color={canLower ? colors.onBrandPrimary : colors.onSurfaceSecondary} />
+                  <Text style={[styles.toggleText, canLower && styles.toggleTextActive]}>Sim</Text>
+                </Pressable>
+                <Pressable testID="autorizar-lower-nao" onPress={() => setCanLower(false)} style={[styles.toggleBtn, !canLower && styles.toggleBtnActive]}>
+                  <Ionicons name="close-circle-outline" size={16} color={!canLower ? colors.onBrandPrimary : colors.onSurfaceSecondary} />
+                  <Text style={[styles.toggleText, !canLower && styles.toggleTextActive]}>Não</Text>
+                </Pressable>
+              </View>
+            </View>
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Serviço a ser realizado</Text>
+              <TextInput
+                testID="autorizar-service-input"
+                style={[styles.input, { minHeight: 70 }]}
+                value={service}
+                onChangeText={setService}
+                placeholder="Ex.: Limpeza, manutenção do motor..."
+                placeholderTextColor={colors.onSurfaceTertiary}
+                multiline
+                textAlignVertical="top"
+              />
+            </View>
+
             {error ? <Text style={styles.errorText} testID="autorizar-error">{error}</Text> : null}
 
             <Pressable
@@ -172,6 +206,8 @@ export default function AutorizarScreen() {
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.cardName, a.status === 'cancelada' && styles.cancelled]}>{a.person_name}</Text>
                       <Text style={styles.cardMeta}>{a.boat_name} • {formatBR(a.date)}</Text>
+                      <Text style={styles.cardMeta}>Descer a lancha: {a.can_lower ? 'Sim' : 'Não'}</Text>
+                      {a.service ? <Text style={styles.cardMeta}>Serviço: {a.service}</Text> : null}
                     </View>
                     {a.status === 'ativa' ? (
                       <Pressable testID={`auth-cancel-${a.id}`} onPress={() => cancel(a.id)} hitSlop={8} style={styles.cancelBtn}>
@@ -202,6 +238,11 @@ const styles = StyleSheet.create({
   fieldGroup: { marginBottom: spacing.lg },
   label: { color: colors.onSurface, fontSize: typography.base, fontWeight: '600', marginBottom: spacing.sm },
   input: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.lg, fontSize: typography.lg, color: colors.onSurface, backgroundColor: colors.surfaceSecondary },
+  toggleRow: { flexDirection: 'row', gap: spacing.sm },
+  toggleBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs, paddingVertical: spacing.md, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceSecondary },
+  toggleBtnActive: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
+  toggleText: { color: colors.onSurfaceSecondary, fontSize: typography.base, fontWeight: '700' },
+  toggleTextActive: { color: colors.onBrandPrimary },
   errorText: { color: colors.error, backgroundColor: '#FEF2F2', padding: spacing.md, borderRadius: radius.sm, fontSize: typography.base, marginBottom: spacing.md },
   button: { backgroundColor: colors.brandPrimary, borderRadius: radius.md, paddingVertical: spacing.lg, alignItems: 'center', marginTop: spacing.sm },
   buttonText: { color: colors.onBrandPrimary, fontSize: typography.lg, fontWeight: '700' },
