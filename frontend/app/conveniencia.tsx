@@ -21,7 +21,7 @@ import { api, boatName, fileUrl, PRODUCT_CATEGORIES } from '@/src/api';
 import type { User, Product, ConvenienceOrder } from '@/src/api';
 import { categoryMeta } from '@/src/categories';
 
-const money = (v: number) => `R$ ${v.toFixed(2).replace('.', ',')}`;
+import { formatMoney as money } from '@/src/format';
 
 const STATUS_LABEL: Record<string, string> = {
   pendente: 'Pendente',
@@ -44,6 +44,7 @@ export default function ConvenienciaScreen() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [catFilter, setCatFilter] = useState<string>('all');
 
   const loadOrders = useCallback(async (cpf: string) => {
     try {
@@ -135,10 +136,26 @@ export default function ConvenienciaScreen() {
         ) : (
           <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
             <Text style={styles.sectionLabel}>Produtos</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+              <Pressable testID="cat-filter-all" onPress={() => { setCatFilter('all'); Haptics.selectionAsync(); }} style={[styles.filterChip, catFilter === 'all' && styles.filterChipActive]}>
+                <Ionicons name="apps-outline" size={14} color={catFilter === 'all' ? '#FFFFFF' : colors.onSurfaceSecondary} />
+                <Text style={[styles.filterChipText, catFilter === 'all' && styles.filterChipTextActive]}>Todos</Text>
+              </Pressable>
+              {PRODUCT_CATEGORIES.map((cat) => {
+                const meta = categoryMeta(cat);
+                const on = catFilter === cat;
+                return (
+                  <Pressable key={cat} testID={`cat-filter-${cat}`} onPress={() => { setCatFilter(cat); Haptics.selectionAsync(); }} style={[styles.filterChip, on && { backgroundColor: meta.color, borderColor: meta.color }]}>
+                    <Ionicons name={meta.icon} size={14} color={on ? '#FFFFFF' : meta.color} />
+                    <Text style={[styles.filterChipText, on && styles.filterChipTextActive]}>{cat}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
             {products.length === 0 ? (
               <Text style={styles.empty}>Nenhum produto disponível no momento.</Text>
             ) : (
-              PRODUCT_CATEGORIES.filter((cat) => products.some((p) => (p.category || 'Outros') === cat)).map((cat) => {
+              PRODUCT_CATEGORIES.filter((cat) => (catFilter === 'all' || catFilter === cat) && products.some((p) => (p.category || 'Outros') === cat)).map((cat) => {
                 const meta = categoryMeta(cat);
                 const catProducts = products.filter((p) => (p.category || 'Outros') === cat);
                 return (
@@ -255,6 +272,11 @@ const styles = StyleSheet.create({
   content: { padding: spacing.lg, paddingBottom: 160 },
   sectionLabel: { color: colors.brandPrimary, fontWeight: '700', fontSize: typography.sm, letterSpacing: 1, textTransform: 'uppercase', marginBottom: spacing.md },
   empty: { color: colors.onSurfaceSecondary, fontSize: typography.base },
+  filterRow: { gap: spacing.sm, paddingBottom: spacing.md, paddingRight: spacing.lg },
+  filterChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
+  filterChipActive: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
+  filterChipText: { color: colors.onSurfaceSecondary, fontSize: typography.sm, fontWeight: '700' },
+  filterChipTextActive: { color: '#FFFFFF' },
   catGroup: { marginBottom: spacing.md },
   catHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm, marginTop: spacing.xs },
   catIcon: { width: 28, height: 28, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center' },

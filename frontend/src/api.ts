@@ -91,7 +91,7 @@ export const api = {
   setTides: (date: string, points: { time: string; height: number }[]) =>
     req<TideDay>(`/tides/${date}`, { method: 'PUT', body: JSON.stringify({ points }) }),
   listUsers: () => req<Client[]>('/users'),
-  createClient: (data: { cpf: string; name: string; phone: string; boats: Boat[] }) =>
+  createClient: (data: { cpf: string; name: string; phone: string; boats: Boat[]; is_staff?: boolean }) =>
     req<Client>('/users', { method: 'POST', body: JSON.stringify(data) }),
   addBoat: (cpf: string, boat: { name: string; draft?: number | null; length?: number | null }) =>
     req<Client>(`/users/${cpf}/boats`, { method: 'POST', body: JSON.stringify(boat) }),
@@ -142,6 +142,12 @@ export const api = {
   // Emergências
   createEmergency: (data: { cpf: string; boat_name?: string | null; location?: string | null; observation?: string | null }) =>
     req<Emergency>('/emergencies', { method: 'POST', body: JSON.stringify(data) }),
+  reboqueQuote: (length: number, distance: number) =>
+    req<ReboqueQuote>(`/reboque/quote?length=${length}&distance=${distance}`),
+  createReboque: (data: { cpf: string; boat_name: string; distance_nm: number; location?: string | null; observation?: string | null }) =>
+    req<Emergency>('/reboque', { method: 'POST', body: JSON.stringify(data) }),
+  billEmergency: (id: string, amount: number) =>
+    req<Emergency>(`/emergencies/${id}/bill`, { method: 'PATCH', body: JSON.stringify({ amount }) }),
   listEmergencies: (cpf?: string, status?: string) => {
     const params = new URLSearchParams();
     if (cpf) params.set('cpf', cpf);
@@ -151,6 +157,8 @@ export const api = {
   },
   resolveEmergency: (id: string) =>
     req<Emergency>(`/emergencies/${id}/resolve`, { method: 'PATCH' }),
+  consumoReport: (month?: string) =>
+    req<ConsumoReport>(`/reports/consumo${month ? `?month=${month}` : ''}`),
 };
 
 export type Product = { id: string; name: string; price: number; active: boolean; in_stock: boolean; category: string; image_url?: string | null };
@@ -189,6 +197,7 @@ export type Authorization = {
 };
 export type Emergency = {
   id: string;
+  kind?: 'socorro' | 'reboque';
   cpf: string;
   user_name: string;
   phone?: string | null;
@@ -198,7 +207,39 @@ export type Emergency = {
   status: 'aberta' | 'atendida';
   created_at: string;
   resolved_at?: string | null;
+  // reboque
+  boat_length?: number | null;
+  distance_nm?: number;
+  additional_nm?: number;
+  base_fee?: number;
+  per_nm?: number;
+  additional_fee?: number;
+  estimated_total?: number;
+  billed_amount?: number | null;
+  billed_at?: string | null;
 };
+
+export type ReboqueQuote = {
+  boat_length?: number | null;
+  distance_nm: number;
+  included_nm: number;
+  additional_nm: number;
+  base_fee: number;
+  per_nm: number;
+  additional_fee: number;
+  estimated_total: number;
+};
+
+export type ConsumoClient = {
+  cpf: string;
+  name: string;
+  convenience_total: number;
+  reboque_total: number;
+  total: number;
+  orders: { id: string; total: number; created_at: string; items: { name: string; qty: number }[]; status: string }[];
+  reboques: { id: string; amount: number; boat_name?: string | null; billed_at?: string | null }[];
+};
+export type ConsumoReport = { month: string; grand_total: number; clients: ConsumoClient[] };
 
 export type SlotInfo = {
   time: string;
@@ -216,4 +257,5 @@ export type Client = {
   phone: string;
   boats: Boat[];
   boat_name?: string;
+  is_staff?: boolean;
 };

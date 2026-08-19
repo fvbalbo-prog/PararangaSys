@@ -548,6 +548,7 @@ class ClientInput(BaseModel):
     name: str
     phone: str
     boats: List[Boat] = []
+    is_staff: bool = False
 
 
 class BoatInput(BaseModel):
@@ -564,7 +565,7 @@ def _boat_name(b) -> str:
 @api_router.get("/users", response_model=List[User])
 async def list_users():
     docs = await db.users.find(
-        {"is_admin": {"$ne": True}, "is_staff": {"$ne": True}}, {"_id": 0}
+        {"is_admin": {"$ne": True}}, {"_id": 0}
     ).sort("name", 1).to_list(1000)
     # normalize legacy string boats -> objects
     for d in docs:
@@ -588,6 +589,7 @@ async def create_client(payload: ClientInput):
         "boat_name": boats[0]["name"] if boats else "",
         "boats": boats,
         "is_admin": False,
+        "is_staff": bool(payload.is_staff),
     }
     await db.users.insert_one(doc)
     doc.pop("_id", None)
@@ -862,12 +864,66 @@ async def checkin_authorization(aid: str):
     return await db.authorizations.find_one({"id": aid}, {"_id": 0})
 
 
-# ===================== Emergência =====================
+# ===================== Emergência / Reboque =====================
 class EmergencyInput(BaseModel):
     cpf: str
     boat_name: Optional[str] = None
     location: Optional[str] = None
     observation: Optional[str] = None
+
+
+class ReboqueInput(BaseModel):
+    cpf: str
+    boat_name: str
+    distance_nm: float
+    location: Optional[str] = None
+    observation: Optional[str] = None
+
+
+class BillInput(BaseModel):
+    amount: float
+
+
+REBOQUE_TABLE = [
+    (25, 1200.0, 120.0),   # até 25 pés
+    (35, 1800.0, 180.0),   # 26 a 35 pés
+    (999, 2500.0, 250.0),  # 36 pés ou mais
+]
+REBOQUE_INCLUDED_NM = 5.0
+
+
+def reboque_quote(length_feet: Optional[float], distance_nm: float) -> dict:
+    feet = length_feet or 0
+    base, per_nm = 2500.0, 250.0
+    for max_feet, b, p in REBOQUE_TABLE:
+        if feet <= max_feet:
+            base, per_nm = b, p
+            break
+    additional_nm = max(0.0, distance_nm - REBOQUE_INCLUDED_NM)
+    additional_fee = round(additional_nm * per_nm, 2)
+    total = round(base + additional_fee, 2)
+    return {
+        "boat_length": length_feet,
+        "distance_nm": distance_nm,
+        "included_nm": REBOQUE_INCLUDED_NM,
+        "additional_nm": additional_nm,
+        "base_fee": base,
+        "per_nm": per_nm,
+        "additional_fee": additional_fee,
+        "estimated_total": total,
+    }
+
+
+@api_router.get("/reboque/quote")
+async def reboque_quote_endpoint(length: float, distance: float):
+    return reboque_quote(length, distance)
+
+
+def _boat_length_for(user: dict, boat_name: Optional[str]) -> Optional[float]:
+    for b in user.get("boats", []):
+        if isinstance(b, dict) and b.get("name") == boat_name:
+            return b.get("length")
+    return None
 
 
 @api_router.post("/emergencies")
@@ -879,6 +935,7 @@ async def create_emergency(payload: EmergencyInput):
     now_iso = datetime.now(timezone.utc).isoformat()
     doc = {
         "id": str(uuid.uuid4()),
+        "kind": "socorro",
         "cpf": cpf,
         "user_name": user["name"],
         "phone": user.get("phone"),
@@ -886,9 +943,42 @@ async def create_emergency(payload: EmergencyInput):
         "location": payload.location,
         "observation": payload.observation,
         "status": "aberta",
+        "billed_amount": None,
+        "billed_at": None,
         "created_at": now_iso,
         "resolved_at": None,
         "updated_at": now_iso,
+    }
+    await db.emergencies.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.post("/reboque")
+async def create_reboque(payload: ReboqueInput):
+    cpf = normalize_cpf(payload.cpf)
+    user = await db.users.find_one({"cpf": cpf}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="CPF não cadastrado.")
+    length = _boat_length_for(user, payload.boat_name)
+    quote = reboque_quote(length, payload.distance_nm)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "kind": "reboque",
+        "cpf": cpf,
+        "user_name": user["name"],
+        "phone": user.get("phone"),
+        "boat_name": payload.boat_name,
+        "location": payload.location,
+        "observation": payload.observation,
+        "status": "aberta",
+        "billed_amount": None,
+        "billed_at": None,
+        "created_at": now_iso,
+        "resolved_at": None,
+        "updated_at": now_iso,
+        **quote,
     }
     await db.emergencies.insert_one(doc)
     doc.pop("_id", None)
@@ -906,6 +996,18 @@ async def list_emergencies(cpf: Optional[str] = None, status: Optional[str] = No
     return docs
 
 
+@api_router.patch("/emergencies/{eid}/bill")
+async def bill_emergency(eid: str, payload: BillInput):
+    now_iso = datetime.now(timezone.utc).isoformat()
+    res = await db.emergencies.update_one(
+        {"id": eid},
+        {"$set": {"billed_amount": round(float(payload.amount), 2), "billed_at": now_iso, "updated_at": now_iso}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Registro não encontrado.")
+    return await db.emergencies.find_one({"id": eid}, {"_id": 0})
+
+
 @api_router.patch("/emergencies/{eid}/resolve")
 async def resolve_emergency(eid: str):
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -915,6 +1017,66 @@ async def resolve_emergency(eid: str):
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Emergência não encontrada.")
     return await db.emergencies.find_one({"id": eid}, {"_id": 0})
+
+
+# ===================== Relatório de consumo (cobrança mensal) =====================
+@api_router.get("/reports/consumo")
+async def consumo_report(month: Optional[str] = None):
+    """month = YYYY-MM. Agrupa por cliente o consumo de conveniência (pedidos
+    não cancelados) e reboques faturados (billed_amount) no mês."""
+    if not month:
+        now = datetime.now(timezone.utc)
+        month = f"{now.year}-{now.month:02d}"
+
+    orders = await db.convenience_orders.find(
+        {"status": {"$ne": "cancelada"}, "created_at": {"$regex": f"^{month}"}}, {"_id": 0}
+    ).to_list(5000)
+    reboques = await db.emergencies.find(
+        {"kind": "reboque", "billed_amount": {"$ne": None}, "billed_at": {"$regex": f"^{month}"}}, {"_id": 0}
+    ).to_list(5000)
+
+    by_client: dict = {}
+
+    def bucket(cpf, name):
+        if cpf not in by_client:
+            by_client[cpf] = {
+                "cpf": cpf,
+                "name": name,
+                "convenience_total": 0.0,
+                "reboque_total": 0.0,
+                "total": 0.0,
+                "orders": [],
+                "reboques": [],
+            }
+        return by_client[cpf]
+
+    for o in orders:
+        b = bucket(o["cpf"], o.get("user_name", ""))
+        b["convenience_total"] = round(b["convenience_total"] + o.get("total", 0), 2)
+        b["orders"].append(
+            {
+                "id": o["id"],
+                "total": o.get("total", 0),
+                "created_at": o.get("created_at"),
+                "items": o.get("items", []),
+                "status": o.get("status"),
+            }
+        )
+    for r in reboques:
+        b = bucket(r["cpf"], r.get("user_name", ""))
+        amt = r.get("billed_amount") or 0
+        b["reboque_total"] = round(b["reboque_total"] + amt, 2)
+        b["reboques"].append(
+            {"id": r["id"], "amount": amt, "boat_name": r.get("boat_name"), "billed_at": r.get("billed_at")}
+        )
+
+    result = []
+    for b in by_client.values():
+        b["total"] = round(b["convenience_total"] + b["reboque_total"], 2)
+        result.append(b)
+    result.sort(key=lambda x: x["total"], reverse=True)
+    grand_total = round(sum(b["total"] for b in result), 2)
+    return {"month": month, "grand_total": grand_total, "clients": result}
 
 
 # ===================== Seed =====================

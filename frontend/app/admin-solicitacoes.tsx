@@ -8,6 +8,8 @@ import {
   ActivityIndicator,
   RefreshControl,
   Vibration,
+  TextInput,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -21,7 +23,7 @@ import type { ConvenienceOrder, Authorization, Emergency } from '@/src/api';
 const alertSound = require('@/assets/sounds/alert.wav');
 
 type Tab = 'pedidos' | 'autorizacoes' | 'emergencias';
-const money = (v: number) => `R$ ${v.toFixed(2).replace('.', ',')}`;
+import { formatMoney as money } from '@/src/format';
 const fmt = (iso: string) =>
   new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 const fmtTime = (iso: string) =>
@@ -40,6 +42,7 @@ export default function AdminSolicitacoesScreen() {
   const [emergencies, setEmergencies] = useState<Emergency[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [billAmounts, setBillAmounts] = useState<Record<string, string>>({});
   const prevEmgRef = useRef<number | null>(null);
   const player = useAudioPlayer(alertSound);
 
@@ -125,6 +128,14 @@ export default function AdminSolicitacoesScreen() {
     setAuths((prev) => prev.map((a) => (a.id === id ? { ...a, entered_at: nowIso } : a)));
     try { await api.checkinAuthorization(id); } catch { load(); }
   };
+  const billReboque = async (id: string, estimated: number) => {
+    const raw = billAmounts[id];
+    const amount = raw != null && raw !== '' ? parseFloat(raw.replace(',', '.')) : estimated;
+    if (isNaN(amount) || amount < 0) { Alert.alert('Valor inválido'); return; }
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setEmergencies((prev) => prev.map((e) => (e.id === id ? { ...e, billed_amount: amount, billed_at: new Date().toISOString() } : e)));
+    try { await api.billEmergency(id, amount); } catch { load(); }
+  };
 
   const TABS: { key: Tab; label: string; badge?: number }[] = [
     { key: 'pedidos', label: 'Conveniência' },
@@ -176,7 +187,7 @@ export default function AdminSolicitacoesScreen() {
             contentContainerStyle={styles.list}
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={colors.brandPrimary} />}
             ListHeaderComponent={
-              <View style={styles.caixa} testID="caixa-summary">
+              <Pressable style={styles.caixa} testID="caixa-summary" onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-relatorio'); }}>
                 <Ionicons name="cash-outline" size={22} color={colors.success} />
                 <View style={styles.caixaCol}>
                   <Text style={styles.caixaLabel}>Hoje</Text>
@@ -187,7 +198,8 @@ export default function AdminSolicitacoesScreen() {
                   <Text style={styles.caixaLabel}>Semana</Text>
                   <Text style={styles.caixaValue} testID="caixa-semana">{money(caixaSemana)}</Text>
                 </View>
-              </View>
+                <Ionicons name="chevron-forward" size={18} color={colors.success} />
+              </Pressable>
             }
             ListEmptyComponent={<Text style={styles.empty}>Nenhum pedido.</Text>}
             renderItem={({ item }) => (
@@ -294,6 +306,38 @@ export default function AdminSolicitacoesScreen() {
                 <Text style={styles.cardMeta}>Lancha: {item.boat_name}{item.phone ? ` • Tel.: ${item.phone}` : ''}</Text>
                 {item.location ? <Text style={styles.cardMeta}>Local: {item.location}</Text> : null}
                 {item.observation ? <Text style={styles.cardMeta}>{item.observation}</Text> : null}
+                {item.kind === 'reboque' ? (
+                  <View style={styles.reboqueBox}>
+                    <View style={styles.reboqueHead}>
+                      <Ionicons name="boat" size={14} color={colors.brandPrimary} />
+                      <Text style={styles.reboqueTitle}>Reboque • {item.distance_nm} MN</Text>
+                    </View>
+                    <Text style={styles.cardMeta}>
+                      Base {money(item.base_fee || 0)} + adicional {money(item.additional_fee || 0)} = estimado {money(item.estimated_total || 0)}
+                    </Text>
+                    {item.billed_amount != null ? (
+                      <View style={[styles.statusTag, { backgroundColor: colors.success, marginTop: spacing.sm }]}>
+                        <Text style={styles.statusTagText}>Lançado na conta: {money(item.billed_amount)}</Text>
+                      </View>
+                    ) : (
+                      <View style={styles.billRow}>
+                        <TextInput
+                          testID={`reboque-bill-input-${item.id}`}
+                          style={styles.billInput}
+                          value={billAmounts[item.id] ?? String(item.estimated_total ?? '')}
+                          onChangeText={(v) => setBillAmounts((prev) => ({ ...prev, [item.id]: v.replace(/[^\d.,]/g, '') }))}
+                          keyboardType="decimal-pad"
+                          placeholder="Valor final"
+                          placeholderTextColor={colors.onSurfaceTertiary}
+                        />
+                        <Pressable testID={`reboque-bill-${item.id}`} onPress={() => billReboque(item.id, item.estimated_total || 0)} style={styles.billBtn}>
+                          <Ionicons name="cash-outline" size={16} color="#FFFFFF" />
+                          <Text style={styles.billBtnText}>Lançar na conta</Text>
+                        </Pressable>
+                      </View>
+                    )}
+                  </View>
+                ) : null}
                 {item.status === 'aberta' ? (
                   <Pressable testID={`emergency-resolve-${item.id}`} onPress={() => resolveEmergency(item.id)} style={styles.resolveBtn}>
                     <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
@@ -356,4 +400,11 @@ const styles = StyleSheet.create({
   statusTagText: { color: '#FFFFFF', fontSize: typography.sm, fontWeight: '700' },
   resolveBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, backgroundColor: colors.success, paddingVertical: spacing.md, borderRadius: radius.sm, marginTop: spacing.md },
   resolveText: { color: '#FFFFFF', fontSize: typography.base, fontWeight: '700' },
+  reboqueBox: { backgroundColor: colors.surface, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border, padding: spacing.md, marginTop: spacing.sm },
+  reboqueHead: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 4 },
+  reboqueTitle: { color: colors.brandPrimary, fontSize: typography.base, fontWeight: '800' },
+  billRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.sm },
+  billInput: { flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, fontSize: typography.base, color: colors.onSurface, backgroundColor: colors.surfaceSecondary },
+  billBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.brandPrimary, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radius.sm },
+  billBtnText: { color: '#FFFFFF', fontSize: typography.sm, fontWeight: '700' },
 });

@@ -72,6 +72,15 @@ Aplicativo mobile (React Native/Expo) para os proprietários de lanchas da Marin
 ## Backlog (solicitado, ainda pendente)
 - (nenhum pendente)
 
+## Features adicionadas (2026-06 - iteração 10)
+- **Filtro por categoria na loja** (cliente `/conveniencia`): chips Todos/Bebidas/Sorvetes/Açaí/Outros com ícones.
+- **Cadastro de funcionário** (`/admin-clientes`): toggle Cliente/Funcionário; funcionário (`is_staff`) acessa só o painel de funcionário; badge no card. `POST /api/users` aceita `is_staff`; `/api/users` lista funcionários.
+- **Painel de status escuro** (`/admin-status`): fundo escuro + letras brancas para leitura em ambiente claro.
+- **Relatório de consumo mensal** (`/admin-relatorio`, `GET /api/reports/consumo?month=YYYY-MM`): agrupa por cliente conveniência + reboque; pedidos lançados na conta assim que feitos; acesso pelo card Caixa em `/admin-solicitacoes`.
+- **Aviso de emergência ao admin**: banner no painel (`/admin`) e tag vermelha "EMERGÊNCIA" + banner no painel de status.
+- **Reboque** (`/emergencia`, aba Reboque): calcula valor pela tabela (≤25 pés base R$1.200 +R$120/MN; 26–35 R$1.800 +R$180/MN; 36+ R$2.500 +R$250/MN; 5 MN inclusas) usando o comprimento cadastrado da lancha; `GET /api/reboque/quote`, `POST /api/reboque`; admin lança o valor final na conta (`PATCH /api/emergencies/{id}/bill`).
+- Formatação monetária pt-BR com separador de milhar (`src/format.ts`).
+
 ## Features adicionadas (2026-06 - iteração 9.2)
 - **Resumo do Caixa**: card no topo da aba Conveniência (admin/staff) com totais de conveniência Hoje e Semana (pedidos não cancelados).
 - **Aviso Sonoro de Emergência**: painel do funcionário e Pedidos & Chamados fazem polling (15s) e tocam alerta (expo-audio, `assets/sounds/alert.wav`) + vibração quando surge nova emergência aberta.

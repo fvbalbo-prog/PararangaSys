@@ -19,6 +19,7 @@ import * as Haptics from 'expo-haptics';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { colors, spacing, radius, typography } from '@/src/theme';
+import { formatMoney } from '@/src/format';
 import { api } from '@/src/api';
 import type { MarinaRequest, RequestType } from '@/src/api';
 import { StatusBadge } from '@/src/components/StatusBadge';
@@ -56,14 +57,20 @@ export default function AdminScreen() {
   const [search, setSearch] = useState('');
   const [generating, setGenerating] = useState(false);
   const [orderTotals, setOrderTotals] = useState<Record<string, number>>({});
+  const [openEmergencies, setOpenEmergencies] = useState(0);
 
   const load = useCallback(async () => {
     try {
       const raw = await AsyncStorage.getItem('user');
       if (!raw) return router.replace('/');
       const iso = toISO(day);
-      const [data, orders] = await Promise.all([api.dayRequests(iso), api.listOrders().catch(() => [])]);
+      const [data, orders, emgs] = await Promise.all([
+        api.dayRequests(iso),
+        api.listOrders().catch(() => []),
+        api.listEmergencies(undefined, 'aberta').catch(() => []),
+      ]);
       setItems(data);
+      setOpenEmergencies(emgs.length);
       const totals: Record<string, number> = {};
       for (const o of orders) {
         if (o.status === 'cancelada') continue;
@@ -84,6 +91,8 @@ export default function AdminScreen() {
     useCallback(() => {
       setLoading(true);
       load();
+      const interval = setInterval(load, 20000);
+      return () => clearInterval(interval);
     }, [load])
   );
 
@@ -166,7 +175,7 @@ export default function AdminScreen() {
 
   const lateCount = quadroRows.filter((r) => r.late).length;
   const convTotalDay = Object.values(orderTotals).reduce((a, b) => a + b, 0);
-  const brl = (v: number) => `R$ ${v.toFixed(2).replace('.', ',')}`;
+  const brl = formatMoney;
 
   const generatePdf = async () => {
     if (quadroRows.length === 0) {
@@ -287,6 +296,19 @@ export default function AdminScreen() {
           <Ionicons name="log-out-outline" size={22} color={colors.onBrandPrimary} />
         </Pressable>
       </View>
+
+      {openEmergencies > 0 ? (
+        <Pressable
+          testID="admin-emergency-banner"
+          onPress={() => router.push('/admin-solicitacoes')}
+          style={styles.emgBanner}
+        >
+          <Ionicons name="alert-circle" size={20} color="#FFFFFF" />
+          <Text style={styles.emgText}>
+            {openEmergencies === 1 ? '1 emergência aberta!' : `${openEmergencies} emergências abertas!`} Toque para atender
+          </Text>
+        </Pressable>
+      ) : null}
 
       {isToday && lateCount > 0 ? (
         <Pressable
@@ -580,6 +602,18 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
   },
   alertText: { color: '#FFFFFF', fontSize: typography.base, fontWeight: '700', flex: 1 },
+  emgBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.error,
+    marginHorizontal: spacing.xl,
+    marginTop: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
+  },
+  emgText: { color: '#FFFFFF', fontSize: typography.base, fontWeight: '800', flex: 1 },
   dateNav: {
     flexDirection: 'row',
     alignItems: 'center',

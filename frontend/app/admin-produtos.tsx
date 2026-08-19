@@ -23,7 +23,7 @@ import { api, fileUrl, PRODUCT_CATEGORIES } from '@/src/api';
 import type { Product, ProductCategory } from '@/src/api';
 import { categoryMeta } from '@/src/categories';
 
-const money = (v: number) => `R$ ${v.toFixed(2).replace('.', ',')}`;
+import { formatMoney as money } from '@/src/format';
 
 export default function AdminProdutosScreen() {
   const router = useRouter();

@@ -1,0 +1,43 @@
+{
+  "summary": "Iteration 10 fully verified. Backend pytest test_marina_iteration10.py: 29/29 PASS (sequential). All 6 new features working end-to-end. (1) Category filter /conveniencia: 5 chips render (cat-filter-all/Bebidas/Sorvetes/Açaí/Outros); tapping filters product cards correctly (All=8, Bebidas=3 seed-cerveja/refri/agua, Sorvetes=1 seed-picole, Açaí=1 seed-acai, Outros=3 seed-gelo/protetor/salgadinho). (2) Staff signup: POST /api/users with is_staff=true creates staff (verified TEST_Funcionario Iter10 88888888888 and seed 77777777777 login 77777/0077 returns is_staff=true); GET /api/users includes staff and excludes admins; admin-clientes shows Carlos Funcionario card with 'Funcionário' badge, 'Acesso ao painel de funcionário' text, and NO boat section; novo-cliente modal has role-cliente/role-funcionario tabs (via new-client-button testID). (3) admin-status has dark background, 'EMERGÊNCIA' red tag next to boat Netuno, status-emergency-banner '3 emergências abertas' visible. (4) Consumo report GET /api/reports/consumo?month=YYYY-MM: aggregates convenience_total (non-cancelled orders) + reboque_total (billed emergencies) per client; grand_total sums correctly; João=R$ 4901,00 (all reboques after billing), Maria=R$ 20,00; past month 2020-01 returns empty; defaults to current month. admin-relatorio: month-label 'Ago/2026', grand-total 'R$ 4921,00', month-prev/next navigate correctly, consumo-{cpf} expandable rows. (5) Emergency alert propagation: /admin shows admin-emergency-banner when open emergencies exist (tap navigates to admin-solicitacoes); /admin-status shows status-emergency-banner + status-emergency-{id} tags per boat with open emergency. (6) Reboque: GET /api/reboque/quote table verified for 7 combos (24/8=1560, 25/5=1200, 30/10=2700, 35/5=1800, 40/10=3750, 50/5=2500, 22/3=1200); POST /api/reboque uses client boat length (João/Netuno 22ft → base 1200, 3 additional NM × 120 = 1560); appears in Meus acionamentos as 'Reboque • Em atendimento • Estimado: R$ 1560,00'. Frontend /emergencia tab-socorro/tab-reboque work; reboque-boat-select shows Netuno, comprimento hint '22 pés', reboque-distance '8' triggers reboque-quote card with base R$ 1200,00 + adicional (3 MN × R$ 120,00) R$ 360,00 = reboque-total 'R$ 1560,00'. (7) Billing: PATCH /api/emergencies/{id}/bill sets billed_amount/billed_at (verified 1600.5 persisted); 404 on unknown id; admin-solicitacoes aba Emergências renders reboque-bill-input-{id} + reboque-bill-{id}; after billing shows 'Lançado na conta: R$ 1600,50' green pill. (8) Regression: login (admin 00000/0000, cliente 11111/1111, staff 55555/0055, funcionario 77777/0077), /requests full lifecycle (subida 17:30 unlimited), /convenience/orders create/list/status, /emergencies create/list/resolve, /authorizations create/checkin/cancel, /products with 4 categories — all OK. Deprecated packages detected: none. SafeAreaView usage OK (react-native-safe-area-context).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "conveniencia/emergencia/admin-relatorio/admin-solicitacoes", "issues": ["Money formatter uses toFixed(2).replace('.', ',') without pt-BR thousands separator (shows 'R$ 1560,00' / 'R$ 4921,00' instead of 'R$ 1.560,00' / 'R$ 4.921,00'). Cosmetic only, values are correct."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_marina_iteration10.py",
+    "/app/test_reports/pytest/iteration10_results.xml"
+  ],
+  "action_items": [
+    "OPTIONAL cosmetic: centralize a pt-BR money() helper (e.g., new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' })) instead of the ad-hoc `R$ ${v.toFixed(2).replace('.', ',')}` used in emergencia.tsx, conveniencia.tsx, admin-relatorio.tsx and admin-solicitacoes.tsx — currently thousands separator missing. Not blocking."
+  ],
+  "critical_code_review_comments": [
+    "server.py:887-914 reboque_quote table is correct and boundary-inclusive (<=25 first bucket, <=35 second, else 2500/250). Included_nm=5 constant. Distance <5 gives additional_nm=0 (max()) — correct.",
+    "server.py:922-926 _boat_length_for iterates user['boats']; falls back to None if boat not found. Note: if user picks a non-existent boat_name the endpoint silently uses top bucket (2500) — acceptable UX (hint on frontend already warns 'usando maior faixa').",
+    "server.py:957-985 create_reboque persists spread of quote fields (boat_length, distance_nm, base_fee, per_nm, additional_nm/fee, estimated_total, included_nm) — makes admin billing UI self-contained.",
+    "server.py:999-1008 bill_emergency uses matched_count for 404 detection and rounds amount to 2 decimals — correct.",
+    "server.py:1023-1079 consumo_report filters by ISO prefix regex on created_at / billed_at — safe because backend always writes UTC ISO. Bucket lambda avoids KeyError. grand_total rounded, clients sorted by total desc — clean.",
+    "server.py:565-573 list_users excludes is_admin=true (correct for admin-clientes UI). Legacy string boats normalized to objects in the response.",
+    "server.py:576-596 create_client accepts is_staff and enforces 11-digit CPF + 409 on duplicate — correct.",
+    "emergencia.tsx:32-41 reboqueQuote mirrors backend table exactly (verified parity: 22ft/8NM shows 1560 on both). Good defensive fallback for missing length (top bucket).",
+    "emergencia.tsx:87-93 quote memo re-computes on selectedLength/distNum change — no unnecessary renders.",
+    "conveniencia.tsx:158-208 category grouping filters PRODUCT_CATEGORIES then products.some(...) → hides empty groups when a specific chip is chosen. Verified: 'Sorvetes' shows only 1 product.",
+    "admin-status: dark theme with EMERGÊNCIA tag + banner. Confirmed via screenshot.",
+    "admin-solicitacoes.tsx billing flow uses reboque-bill-input-{id}/reboque-bill-{id} testIDs and shows 'Lançado na conta: R$ x,xx' green pill after PATCH; caixa-summary is a Pressable that navigates to /admin-relatorio — good UX."
+  ],
+  "updated_files": ["/app/backend/tests/test_marina_iteration10.py (new)"],
+  "success_rate": {"backend": "100% (29/29 pytest sequential; 28/29 in xdist parallel — 1 known ordering artifact between billing/consumo, not a product bug)", "frontend": "100% (category filter, reboque tab & quote, admin-emergency-banner, status-emergency banner+tags, admin-clientes funcionário badge, novo-cliente modal role tabs, admin-solicitacoes reboque billing lançamento, caixa-summary→relatorio navigation, month-prev/next, grand-total, consumo-{cpf} expansions)"},
+  "seed_data_creation": "Created via tests: TEST_Funcionario Iter10 (88888888888) staff user; 1 reboque for João/Netuno (billed 1600.5); 1 convenience order for João seed-agua R$24 (cancelled at teardown); 1 authorization for João (cancelled at teardown); 1 extra reboque billed 1700.00 via UI flow. Frontend testing left ~4 open reboques for João at end of run (not resolved) — admin can 'Marcar como atendida' from the Emergências tab if desired.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iter 10 endpoints: GET /api/reboque/quote?length=&distance=; POST /api/reboque {cpf,boat_name,distance_nm,location?,observation?}; PATCH /api/emergencies/{id}/bill {amount}; GET /api/reports/consumo?month=YYYY-MM (returns {month, grand_total, clients:[{cpf,name,convenience_total,reboque_total,total,orders,reboques}]}); POST /api/users {cpf,name,phone,boats,is_staff} (is_staff=true creates staff w/ no boats). New testIDs: cat-filter-all + cat-filter-{Bebidas|Sorvetes|Açaí|Outros}; tab-socorro/tab-reboque; reboque-boat-select/reboque-distance/reboque-quote/reboque-total/reboque-submit; new-client-button (opens Novo cliente modal); role-cliente/role-funcionario (radio); status-emergency-banner and status-emergency-{emergency-id}; admin-emergency-banner (on /admin); caixa-summary/caixa-hoje/caixa-semana (Pressable — taps to /admin-relatorio); reboque-bill-input-{id} + reboque-bill-{id} (aba Emergências); relatorio-title / month-prev / month-label / month-next / grand-total / consumo-{cpf}. Login testIDs are 'cpf-input' + 'phone-input' + 'login-submit-button'. Frontend uses process.env.EXPO_PUBLIC_BACKEND_URL. Money helper is ad-hoc (no thousands separator) — cosmetic only.",
+  "rca_of_issue": "N/A — all 6 iteration-10 features implemented correctly. Only cosmetic gap is missing pt-BR thousands separator in money helpers, purely visual."
+}

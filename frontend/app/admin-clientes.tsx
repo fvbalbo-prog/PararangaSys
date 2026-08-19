@@ -47,6 +47,7 @@ export default function AdminClientesScreen() {
   const [cCpf, setCCpf] = useState('');
   const [cName, setCName] = useState('');
   const [cPhone, setCPhone] = useState('');
+  const [cIsStaff, setCIsStaff] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -119,11 +120,11 @@ export default function AdminClientesScreen() {
     }
     try {
       setSaving(true);
-      const created = await api.createClient({ cpf: digits, name: cName.trim(), phone: cPhone.trim(), boats: [] });
+      const created = await api.createClient({ cpf: digits, name: cName.trim(), phone: cPhone.trim(), boats: [], is_staff: cIsStaff });
       setClients((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setClientModal(false);
-      setCCpf(''); setCName(''); setCPhone('');
+      setCCpf(''); setCName(''); setCPhone(''); setCIsStaff(false);
     } catch (e: any) {
       setModalError(e.message || 'Erro ao cadastrar.');
     } finally {
@@ -165,40 +166,52 @@ export default function AdminClientesScreen() {
                   <Text style={styles.clientName}>{item.name}</Text>
                   <Text style={styles.clientMeta}>{formatCpf(item.cpf)} • {item.phone}</Text>
                 </View>
+                {item.is_staff ? (
+                  <View style={styles.staffBadge}>
+                    <Ionicons name="briefcase-outline" size={12} color={colors.onBrandPrimary} />
+                    <Text style={styles.staffBadgeText}>Funcionário</Text>
+                  </View>
+                ) : null}
               </View>
 
-              {item.boats.length === 0 ? (
-                <Text style={styles.noBoats}>Nenhuma lancha cadastrada.</Text>
+              {item.is_staff ? (
+                <Text style={styles.noBoats}>Acesso ao painel de funcionário.</Text>
               ) : (
-                item.boats.map((b) => (
-                  <View key={b.name} style={styles.boatRow} testID={`boat-${item.cpf}-${b.name}`}>
-                    <Ionicons name="boat" size={18} color={colors.brandPrimary} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.boatName}>{b.name}</Text>
-                      <Text style={styles.boatSpec}>
-                        Calado: {b.draft != null ? `${b.draft} m` : '—'} • Comprimento: {b.length != null ? `${b.length} pés` : '—'}
-                      </Text>
-                    </View>
-                    <Pressable
-                      testID={`remove-boat-${item.cpf}-${b.name}`}
-                      hitSlop={8}
-                      onPress={() => removeBoat(item.cpf, b.name)}
-                      style={styles.trashBtn}
-                    >
-                      <Ionicons name="trash-outline" size={18} color={colors.error} />
-                    </Pressable>
-                  </View>
-                ))
-              )}
+                <>
+                  {item.boats.length === 0 ? (
+                    <Text style={styles.noBoats}>Nenhuma lancha cadastrada.</Text>
+                  ) : (
+                    item.boats.map((b) => (
+                      <View key={b.name} style={styles.boatRow} testID={`boat-${item.cpf}-${b.name}`}>
+                        <Ionicons name="boat" size={18} color={colors.brandPrimary} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.boatName}>{b.name}</Text>
+                          <Text style={styles.boatSpec}>
+                            Calado: {b.draft != null ? `${b.draft} m` : '—'} • Comprimento: {b.length != null ? `${b.length} pés` : '—'}
+                          </Text>
+                        </View>
+                        <Pressable
+                          testID={`remove-boat-${item.cpf}-${b.name}`}
+                          hitSlop={8}
+                          onPress={() => removeBoat(item.cpf, b.name)}
+                          style={styles.trashBtn}
+                        >
+                          <Ionicons name="trash-outline" size={18} color={colors.error} />
+                        </Pressable>
+                      </View>
+                    ))
+                  )}
 
-              <Pressable
-                testID={`add-boat-${item.cpf}`}
-                onPress={() => openBoatModal(item.cpf)}
-                style={({ pressed }) => [styles.addBoatBtn, pressed && { opacity: 0.85 }]}
-              >
-                <Ionicons name="add-circle-outline" size={18} color={colors.brandPrimary} />
-                <Text style={styles.addBoatText}>Adicionar lancha</Text>
-              </Pressable>
+                  <Pressable
+                    testID={`add-boat-${item.cpf}`}
+                    onPress={() => openBoatModal(item.cpf)}
+                    style={({ pressed }) => [styles.addBoatBtn, pressed && { opacity: 0.85 }]}
+                  >
+                    <Ionicons name="add-circle-outline" size={18} color={colors.brandPrimary} />
+                    <Text style={styles.addBoatText}>Adicionar lancha</Text>
+                  </Pressable>
+                </>
+              )}
             </View>
           )}
         />
@@ -236,8 +249,18 @@ export default function AdminClientesScreen() {
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalRoot}>
           <Pressable style={styles.modalBackdrop} onPress={() => setClientModal(false)} />
           <View style={styles.modalSheet}>
-            <Text style={styles.modalTitle}>Novo cliente</Text>
+            <Text style={styles.modalTitle}>{cIsStaff ? 'Novo funcionário' : 'Novo cliente'}</Text>
             <ScrollView keyboardShouldPersistTaps="handled">
+              <View style={styles.roleRow}>
+                <Pressable testID="role-cliente" onPress={() => setCIsStaff(false)} style={[styles.roleBtn, !cIsStaff && styles.roleBtnActive]}>
+                  <Ionicons name="person-outline" size={16} color={!cIsStaff ? colors.onBrandPrimary : colors.onSurfaceSecondary} />
+                  <Text style={[styles.roleText, !cIsStaff && styles.roleTextActive]}>Cliente</Text>
+                </Pressable>
+                <Pressable testID="role-funcionario" onPress={() => setCIsStaff(true)} style={[styles.roleBtn, cIsStaff && styles.roleBtnActive]}>
+                  <Ionicons name="briefcase-outline" size={16} color={cIsStaff ? colors.onBrandPrimary : colors.onSurfaceSecondary} />
+                  <Text style={[styles.roleText, cIsStaff && styles.roleTextActive]}>Funcionário</Text>
+                </Pressable>
+              </View>
               <Text style={styles.fieldLabel}>CPF</Text>
               <TextInput testID="client-cpf-input" style={styles.input} value={cCpf} onChangeText={(v) => setCCpf(formatCpf(v))} placeholder="000.000.000-00" placeholderTextColor={colors.onSurfaceTertiary} keyboardType="number-pad" inputMode="numeric" maxLength={14} />
               <Text style={styles.fieldLabel}>Nome</Text>
@@ -251,7 +274,7 @@ export default function AdminClientesScreen() {
                 <Text style={styles.modalCancelText}>Cancelar</Text>
               </Pressable>
               <Pressable testID="save-client-button" style={[styles.modalBtn, styles.modalSave]} onPress={submitClient} disabled={saving}>
-                {saving ? <ActivityIndicator color={colors.onBrandPrimary} /> : <Text style={styles.modalSaveText}>Cadastrar</Text>}
+                {saving ? <ActivityIndicator color={colors.onBrandPrimary} /> : <Text style={styles.modalSaveText}>{cIsStaff ? 'Cadastrar funcionário' : 'Cadastrar'}</Text>}
               </Pressable>
             </View>
           </View>
@@ -277,6 +300,13 @@ const styles = StyleSheet.create({
   clientName: { color: colors.onSurface, fontSize: typography.lg, fontWeight: '800' },
   clientMeta: { color: colors.onSurfaceSecondary, fontSize: typography.sm, marginTop: 2 },
   noBoats: { color: colors.onSurfaceTertiary, fontSize: typography.base, fontStyle: 'italic', marginBottom: spacing.sm },
+  staffBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.brandPrimary, borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: 4 },
+  staffBadgeText: { color: colors.onBrandPrimary, fontSize: typography.sm, fontWeight: '700' },
+  roleRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md, backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, padding: spacing.xs },
+  roleBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs, paddingVertical: spacing.md, borderRadius: radius.sm },
+  roleBtnActive: { backgroundColor: colors.brandPrimary },
+  roleText: { color: colors.onSurfaceSecondary, fontSize: typography.base, fontWeight: '700' },
+  roleTextActive: { color: colors.onBrandPrimary },
   boatRow: {
     flexDirection: 'row',
     alignItems: 'center',
