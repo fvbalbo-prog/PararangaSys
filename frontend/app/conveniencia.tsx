@@ -10,7 +10,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   Image,
-  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -21,6 +20,7 @@ import { colors, spacing, radius, typography } from '@/src/theme';
 import { api, boatName, fileUrl, PRODUCT_CATEGORIES } from '@/src/api';
 import type { User, Product, ConvenienceOrder } from '@/src/api';
 import { categoryMeta } from '@/src/categories';
+import { AppDialog, type DialogButton } from '@/src/components/AppDialog';
 
 import { formatMoney as money } from '@/src/format';
 
@@ -46,6 +46,8 @@ export default function ConvenienciaScreen() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [catFilter, setCatFilter] = useState<string>('all');
+  const [dialog, setDialog] = useState<{ title: string; message?: string; buttons: DialogButton[] } | null>(null);
+  const closeDialog = () => setDialog(null);
 
   const loadOrders = useCallback(async (cpf: string) => {
     try {
@@ -111,7 +113,11 @@ export default function ConvenienciaScreen() {
       setQty({});
       setObservation('');
       await loadOrders(user.cpf);
-      Alert.alert('Pedido enviado', 'Seu pedido foi registrado e o valor será cobrado na sua fatura mensal.');
+      setDialog({
+        title: 'Pedido realizado!',
+        message: 'Seu pedido foi registrado e o valor será cobrado na sua fatura mensal.',
+        buttons: [{ label: 'OK', variant: 'primary', onPress: closeDialog }],
+      });
     } catch (e: any) {
       setError(e.message || 'Erro ao enviar pedido.');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -128,14 +134,14 @@ export default function ConvenienciaScreen() {
       return;
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    Alert.alert(
-      'Confirmar pedido',
-      `O valor de ${money(total)} será lançado na sua conta e cobrado na fatura mensal. Você concorda?`,
-      [
-        { text: 'Não', style: 'cancel' },
-        { text: 'Sim, concordo', onPress: doSubmit },
-      ]
-    );
+    setDialog({
+      title: 'Confirmar pedido',
+      message: `O valor de ${money(total)} será lançado na sua conta e cobrado na fatura mensal. Você concorda?`,
+      buttons: [
+        { label: 'Não', variant: 'cancel', onPress: closeDialog },
+        { label: 'Sim, concordo', variant: 'primary', testID: 'confirm-order', onPress: () => { closeDialog(); doSubmit(); } },
+      ],
+    });
   };
 
   return (
@@ -279,6 +285,14 @@ export default function ConvenienciaScreen() {
           </Pressable>
         </View>
       </KeyboardAvoidingView>
+      <AppDialog
+        visible={!!dialog}
+        title={dialog?.title || ''}
+        message={dialog?.message}
+        buttons={dialog?.buttons || []}
+        onRequestClose={closeDialog}
+        testID="conveniencia-dialog"
+      />
     </SafeAreaView>
   );
 }

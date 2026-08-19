@@ -933,8 +933,8 @@ class ReboqueInput(BaseModel):
 
 
 # Coordenadas da marina (ponto de partida do reboque) — ajustável
-MARINA_LAT = float(os.environ.get("MARINA_LAT", "-27.5969"))
-MARINA_LNG = float(os.environ.get("MARINA_LNG", "-48.5495"))
+MARINA_LAT = float(os.environ.get("MARINA_LAT", "-23.7980368"))
+MARINA_LNG = float(os.environ.get("MARINA_LNG", "-45.3986618"))
 
 
 def haversine_nm(lat1, lon1, lat2, lon2) -> float:
@@ -1102,6 +1102,17 @@ async def resolve_emergency(eid: str):
     )
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Emergência não encontrada.")
+    return await db.emergencies.find_one({"id": eid}, {"_id": 0})
+
+
+@api_router.patch("/emergencies/{eid}/cancel")
+async def cancel_emergency(eid: str):
+    now_iso = datetime.now(timezone.utc).isoformat()
+    res = await db.emergencies.update_one(
+        {"id": eid}, {"$set": {"status": "cancelada", "updated_at": now_iso}}
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Solicitação não encontrada.")
     return await db.emergencies.find_one({"id": eid}, {"_id": 0})
 
 

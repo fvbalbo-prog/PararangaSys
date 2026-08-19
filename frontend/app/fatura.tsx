@@ -18,10 +18,15 @@ function monthLabel(ym: string) {
 export default function FaturaScreen() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
+  const [{ year, month }, setYm] = useState(() => { const d = new Date(); return { year: d.getFullYear(), month: d.getMonth() + 1 }; });
   const [current, setCurrent] = useState<ConsumoClient | null>(null);
   const [statements, setStatements] = useState<Statement[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+
+  const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+  const now = new Date();
+  const isCurrentMonth = year === now.getFullYear() && month === now.getMonth() + 1;
 
   const load = useCallback(async () => {
     const raw = await AsyncStorage.getItem('user');
@@ -29,10 +34,8 @@ export default function FaturaScreen() {
     const u: User = JSON.parse(raw);
     setUser(u);
     try {
-      const now = new Date();
-      const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
       const [rep, sts] = await Promise.all([
-        api.consumoReport(ym, u.cpf),
+        api.consumoReport(monthStr, u.cpf),
         api.listStatements(u.cpf),
       ]);
       setCurrent(rep.clients[0] || null);
@@ -46,9 +49,16 @@ export default function FaturaScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [router]);
+  }, [router, monthStr]);
 
   useFocusEffect(useCallback(() => { setLoading(true); load(); }, [load]));
+
+  const shiftMonth = (delta: number) => {
+    let m = month + delta, y = year;
+    if (m < 1) { m = 12; y -= 1; }
+    if (m > 12) { m = 1; y += 1; }
+    setYm({ year: y, month: m });
+  };
 
   return (
     <SafeAreaView style={styles.root} edges={['top', 'bottom']} testID="fatura-screen">
@@ -69,9 +79,19 @@ export default function FaturaScreen() {
           contentContainerStyle={styles.content}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={colors.brandPrimary} />}
         >
-          <Text style={styles.sectionLabel}>Mês atual (parcial)</Text>
+          <View style={styles.monthNav}>
+            <Pressable testID="fatura-month-prev" onPress={() => shiftMonth(-1)} hitSlop={10} style={styles.navBtn}>
+              <Ionicons name="chevron-back" size={20} color={colors.brandPrimary} />
+            </Pressable>
+            <Text style={styles.monthLabel} testID="fatura-month-label">{MONTHS[month - 1]} / {year}</Text>
+            <Pressable testID="fatura-month-next" onPress={() => shiftMonth(1)} hitSlop={10} disabled={isCurrentMonth} style={[styles.navBtn, isCurrentMonth && { opacity: 0.3 }]}>
+              <Ionicons name="chevron-forward" size={20} color={colors.brandPrimary} />
+            </Pressable>
+          </View>
+
+          <Text style={styles.sectionLabel}>{isCurrentMonth ? 'Mês atual (parcial)' : 'Consumo do mês'}</Text>
           <View style={styles.bigCard}>
-            <Text style={styles.bigLabel}>Total até agora</Text>
+            <Text style={styles.bigLabel}>Total{isCurrentMonth ? ' até agora' : ''}</Text>
             <Text style={styles.bigValue} testID="fatura-current-total">{money(current?.total || 0)}</Text>
             <View style={styles.splitRow}>
               <Text style={styles.splitText}>Conveniência: {money(current?.convenience_total || 0)}</Text>
@@ -120,6 +140,9 @@ const styles = StyleSheet.create({
   subtitle: { color: colors.onSurfaceSecondary, fontSize: typography.sm, marginTop: 2 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   content: { padding: spacing.lg, paddingBottom: spacing.xxxl },
+  monthNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xl, marginBottom: spacing.md },
+  navBtn: { padding: spacing.sm, borderRadius: radius.pill, backgroundColor: colors.surfaceSecondary },
+  monthLabel: { color: colors.onSurface, fontSize: typography.lg, fontWeight: '800', minWidth: 130, textAlign: 'center' },
   sectionLabel: { color: colors.brandPrimary, fontWeight: '700', fontSize: typography.sm, letterSpacing: 1, textTransform: 'uppercase', marginBottom: spacing.md, marginTop: spacing.sm },
   bigCard: { backgroundColor: colors.brandPrimary, borderRadius: radius.md, padding: spacing.xl, marginBottom: spacing.lg },
   bigLabel: { color: colors.brandSecondary, fontSize: typography.sm, fontWeight: '700' },

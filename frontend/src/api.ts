@@ -164,6 +164,8 @@ export const api = {
   },
   resolveEmergency: (id: string) =>
     req<Emergency>(`/emergencies/${id}/resolve`, { method: 'PATCH' }),
+  cancelEmergency: (id: string) =>
+    req<Emergency>(`/emergencies/${id}/cancel`, { method: 'PATCH' }),
   consumoReport: (month?: string, cpf?: string) => {
     const qs = new URLSearchParams();
     if (month) qs.set('month', month);
@@ -222,7 +224,7 @@ export type Emergency = {
   boat_name?: string | null;
   location?: string | null;
   observation?: string | null;
-  status: 'aberta' | 'atendida';
+  status: 'aberta' | 'atendida' | 'cancelada';
   created_at: string;
   resolved_at?: string | null;
   // reboque

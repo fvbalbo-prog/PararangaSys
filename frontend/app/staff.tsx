@@ -117,14 +117,6 @@ export default function StaffScreen() {
           <Text style={styles.kicker}>FUNCIONÁRIOS</Text>
           <Text style={styles.title} testID="staff-title">Confirmar movimentações</Text>
         </View>
-        <Pressable
-          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-solicitacoes'); }}
-          hitSlop={12}
-          testID="staff-solicitacoes-button"
-          style={[styles.logoutBtn, { marginRight: spacing.sm }]}
-        >
-          <Ionicons name="receipt-outline" size={22} color={colors.onBrandPrimary} />
-        </Pressable>
         <Pressable onPress={logout} hitSlop={12} testID="staff-logout" style={styles.logoutBtn}>
           <Ionicons name="log-out-outline" size={22} color={colors.onBrandPrimary} />
         </Pressable>

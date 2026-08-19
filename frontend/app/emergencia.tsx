@@ -20,6 +20,7 @@ import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { SelectField } from '@/src/components/SelectField';
+import { AppDialog, type DialogButton } from '@/src/components/AppDialog';
 import { api, boatName } from '@/src/api';
 import type { User, Emergency, Boat, ReboqueQuote } from '@/src/api';
 
@@ -52,6 +53,10 @@ export default function EmergenciaScreen() {
   const [quote, setQuote] = useState<ReboqueQuote | null>(null);
   const [locating, setLocating] = useState(false);
   const [rebObs, setRebObs] = useState('');
+  const [dialog, setDialog] = useState<{ title: string; message?: string; buttons: DialogButton[] } | null>(null);
+  const closeDialog = () => setDialog(null);
+  const showInfo = (title: string, message?: string) =>
+    setDialog({ title, message, buttons: [{ label: 'OK', variant: 'primary', onPress: () => setDialog(null) }] });
 
   const loadList = useCallback(async (cpf: string) => {
     try {
@@ -145,9 +150,9 @@ export default function EmergenciaScreen() {
       setLocation('');
       setObservation('');
       await loadList(user.cpf);
-      Alert.alert('Emergência enviada', 'A equipe da marina foi notificada e entrará em contato.');
+      showInfo('Mensagem enviada com sucesso!', 'A equipe da marina foi notificada e entrará em contato.');
     } catch (e: any) {
-      Alert.alert('Erro', e.message || 'Não foi possível enviar a emergência.');
+      showInfo('Erro', e.message || 'Não foi possível enviar a emergência.');
     } finally {
       setSending(false);
     }
@@ -155,14 +160,14 @@ export default function EmergenciaScreen() {
 
   const confirmSocorro = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    Alert.alert(
-      'Acionar emergência?',
-      'A equipe da marina será notificada imediatamente com seus dados e da sua lancha.',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        { text: 'Acionar', style: 'destructive', onPress: dispatchSocorro },
-      ]
-    );
+    setDialog({
+      title: 'Acionar emergência?',
+      message: 'A equipe da marina será notificada imediatamente com seus dados e da sua lancha.',
+      buttons: [
+        { label: 'Cancelar', variant: 'cancel', onPress: closeDialog },
+        { label: 'Acionar', variant: 'destructive', testID: 'confirm-socorro', onPress: () => { closeDialog(); dispatchSocorro(); } },
+      ],
+    });
   };
 
   const dispatchReboque = async () => {
@@ -181,26 +186,47 @@ export default function EmergenciaScreen() {
       setQuote(null);
       setRebObs('');
       await loadList(user.cpf);
-      Alert.alert('Reboque solicitado', 'A equipe da marina foi notificada. O valor final será lançado na sua conta.');
+      showInfo('Reboque solicitado com sucesso!', 'A equipe da marina foi notificada. O valor final será lançado na sua conta.');
     } catch (e: any) {
-      Alert.alert('Erro', e.message || 'Não foi possível solicitar o reboque.');
+      showInfo('Erro', e.message || 'Não foi possível solicitar o reboque.');
     } finally {
       setSending(false);
     }
   };
 
   const confirmReboque = () => {
-    if (!boat) { Alert.alert('Selecione a lancha'); return; }
-    if (!coords || !quote) { Alert.alert('Localização necessária', 'Toque em "Usar minha localização" para calcular a distância.'); return; }
+    if (!boat) { showInfo('Selecione a lancha'); return; }
+    if (!coords || !quote) { showInfo('Localização necessária', 'Toque em "Usar minha localização" para calcular a distância.'); return; }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    Alert.alert(
-      'Confirmar reboque?',
-      `Distância: ${quote.distance_nm} MN\nValor estimado: ${money(quote.estimated_total)}\n\nApós a confirmação, a equipe será acionada e o valor final será lançado na sua conta.`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        { text: 'Confirmar', onPress: dispatchReboque },
-      ]
-    );
+    setDialog({
+      title: 'Confirmar reboque?',
+      message: `Distância: ${quote.distance_nm} MN\nValor estimado: ${money(quote.estimated_total)}\n\nApós a confirmação, a equipe será acionada e o valor final será lançado na sua conta.`,
+      buttons: [
+        { label: 'Não', variant: 'cancel', onPress: closeDialog },
+        { label: 'Sim, confirmar', variant: 'primary', testID: 'confirm-reboque', onPress: () => { closeDialog(); dispatchReboque(); } },
+      ],
+    });
+  };
+
+  const cancelRequest = (id: string) => {
+    setDialog({
+      title: 'Cancelar solicitação?',
+      message: 'Deseja cancelar esta solicitação?',
+      buttons: [
+        { label: 'Voltar', variant: 'cancel', onPress: closeDialog },
+        {
+          label: 'Cancelar solicitação',
+          variant: 'destructive',
+          testID: `confirm-cancel-${id}`,
+          onPress: async () => {
+            closeDialog();
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+            setList((prev) => prev.map((e) => (e.id === id ? { ...e, status: 'cancelada' } : e)));
+            try { await api.cancelEmergency(id); } catch { if (user) loadList(user.cpf); }
+          },
+        },
+      ],
+    });
   };
 
   return (
@@ -289,12 +315,14 @@ export default function EmergenciaScreen() {
                 <Text style={styles.sectionLabel}>Meus acionamentos</Text>
                 {list.map((e) => {
                   const isReboque = e.kind === 'reboque';
+                  const statusText = e.status === 'aberta' ? 'Em atendimento' : e.status === 'cancelada' ? 'Cancelado' : 'Atendido';
+                  const dotColor = e.status === 'aberta' ? colors.error : e.status === 'cancelada' ? colors.onSurfaceTertiary : colors.success;
                   return (
                     <View key={e.id} style={styles.card} testID={`emergency-${e.id}`}>
-                      <View style={[styles.dot, { backgroundColor: e.status === 'aberta' ? colors.error : colors.success }]} />
+                      <View style={[styles.dot, { backgroundColor: dotColor }]} />
                       <View style={{ flex: 1 }}>
                         <Text style={styles.cardTitle}>
-                          {isReboque ? 'Reboque' : 'Socorro'} • {e.status === 'aberta' ? 'Em atendimento' : 'Atendido'}
+                          {isReboque ? 'Reboque' : 'Socorro'} • {statusText}
                         </Text>
                         <Text style={styles.cardMeta}>{formatDateTime(e.created_at)}{e.boat_name ? ` • ${e.boat_name}` : ''}</Text>
                         {isReboque ? (
@@ -305,6 +333,12 @@ export default function EmergenciaScreen() {
                           </Text>
                         ) : null}
                         {e.location ? <Text style={styles.cardMeta}>Local: {e.location}</Text> : null}
+                        {e.status === 'aberta' ? (
+                          <Pressable testID={`cancel-emergency-${e.id}`} onPress={() => cancelRequest(e.id)} style={styles.cancelReqBtn}>
+                            <Ionicons name="close-circle-outline" size={15} color={colors.error} />
+                            <Text style={styles.cancelReqText}>Cancelar solicitação</Text>
+                          </Pressable>
+                        ) : null}
                       </View>
                     </View>
                   );
@@ -314,6 +348,14 @@ export default function EmergenciaScreen() {
           </ScrollView>
         )}
       </KeyboardAvoidingView>
+      <AppDialog
+        visible={!!dialog}
+        title={dialog?.title || ''}
+        message={dialog?.message}
+        buttons={dialog?.buttons || []}
+        onRequestClose={closeDialog}
+        testID="emergencia-dialog"
+      />
     </SafeAreaView>
   );
 }
@@ -354,4 +396,6 @@ const styles = StyleSheet.create({
   dot: { width: 10, height: 10, borderRadius: 5 },
   cardTitle: { color: colors.onSurface, fontSize: typography.lg, fontWeight: '700' },
   cardMeta: { color: colors.onSurfaceSecondary, fontSize: typography.sm, marginTop: 2 },
+  cancelReqBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: spacing.sm, alignSelf: 'flex-start' },
+  cancelReqText: { color: colors.error, fontSize: typography.sm, fontWeight: '700' },
 });

@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { colors, spacing, radius, typography } from '@/src/theme';
+import { api } from '@/src/api';
 import type { User } from '@/src/api';
 
 type Item = {
@@ -30,12 +31,20 @@ export default function MenuScreen() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [newInvoice, setNewInvoice] = useState(false);
 
   const loadUser = useCallback(async () => {
     const raw = await AsyncStorage.getItem('user');
     if (!raw) return router.replace('/');
-    setUser(JSON.parse(raw));
+    const u: User = JSON.parse(raw);
+    setUser(u);
     setLoading(false);
+    try {
+      const sts = await api.listStatements(u.cpf);
+      setNewInvoice(sts.some((s) => !s.read));
+    } catch {
+      setNewInvoice(false);
+    }
   }, [router]);
 
   useFocusEffect(useCallback(() => { loadUser(); }, [loadUser]));
@@ -80,6 +89,9 @@ export default function MenuScreen() {
               <Text style={styles.rowTitle}>{it.title}</Text>
               <Text style={styles.rowSubtitle}>{it.subtitle}</Text>
             </View>
+            {it.id === 'fatura' && newInvoice ? (
+              <View style={styles.newBadge} testID="menu-fatura-badge"><Text style={styles.newBadgeText}>Novo</Text></View>
+            ) : null}
             <Ionicons name="chevron-forward" size={20} color={colors.onSurfaceTertiary} />
           </Pressable>
         ))}
@@ -101,4 +113,6 @@ const styles = StyleSheet.create({
   iconWrap: { width: 52, height: 52, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
   rowTitle: { color: colors.onSurface, fontSize: typography.lg, fontWeight: '800' },
   rowSubtitle: { color: colors.onSurfaceSecondary, fontSize: typography.sm, marginTop: 2 },
+  newBadge: { backgroundColor: colors.error, borderRadius: radius.pill, paddingHorizontal: spacing.sm, paddingVertical: 3 },
+  newBadgeText: { color: '#FFFFFF', fontSize: 11, fontWeight: '800' },
 });

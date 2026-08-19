@@ -72,6 +72,16 @@ Aplicativo mobile (React Native/Expo) para os proprietários de lanchas da Marin
 ## Backlog (solicitado, ainda pendente)
 - (nenhum pendente)
 
+## Features/correções (2026-06 - iteração 12)
+- **Correção crítica**: `Alert.alert` com vários botões não aparecia no preview web → criado `AppDialog` (Modal cross-platform). Agora as confirmações e mensagens de sucesso aparecem em qualquer plataforma.
+- **Emergência**: confirmação → "Mensagem enviada com sucesso!"; lista permite **cancelar solicitação** (`PATCH /api/emergencies/{id}/cancel`).
+- **Conveniência**: confirmação → "Pedido realizado!"; pedido aparece em Meus pedidos e no painel admin.
+- **Coordenadas da marina** atualizadas para -23.7980368, -45.3986618; reboque mostra estimativa + confirmação.
+- **Confirmar entrada no app**: cliente vê "Entrada confirmada às HH:MM" quando a portaria faz o check-in.
+- **Histórico de faturas**: navegação por mês em Minha Fatura.
+- **Aviso de fatura nova**: badge "Novo" no menu quando a marina envia um resumo.
+- **Painel funcionário**: removido o acesso a "Pedidos & Chamados" (agora só pelo admin).
+
 ## Features adicionadas (2026-06 - iteração 11)
 - **Janela de agendamento**: descida/subida apenas para hoje ou amanhã, com mínimo de 1h de antecedência (validado no backend em BR_TZ; frontend limita data e marca slots "Cedo").
 - **Autorizar Entrada**: campos "autorizado a descer a lancha (Sim/Não)" e "serviço a ser realizado".

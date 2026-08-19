@@ -345,8 +345,8 @@ export default function AdminSolicitacoesScreen() {
                     <Text style={styles.resolveText}>Marcar como atendida</Text>
                   </Pressable>
                 ) : (
-                  <View style={[styles.statusTag, { backgroundColor: colors.success }]}>
-                    <Text style={styles.statusTagText}>Atendida</Text>
+                  <View style={[styles.statusTag, { backgroundColor: item.status === 'cancelada' ? colors.onSurfaceTertiary : colors.success }]}>
+                    <Text style={styles.statusTagText}>{item.status === 'cancelada' ? 'Cancelada' : 'Atendida'}</Text>
                   </View>
                 )}
               </View>

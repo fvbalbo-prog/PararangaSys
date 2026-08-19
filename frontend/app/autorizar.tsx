@@ -208,6 +208,12 @@ export default function AutorizarScreen() {
                       <Text style={styles.cardMeta}>{a.boat_name} • {formatBR(a.date)}</Text>
                       <Text style={styles.cardMeta}>Descer a lancha: {a.can_lower ? 'Sim' : 'Não'}</Text>
                       {a.service ? <Text style={styles.cardMeta}>Serviço: {a.service}</Text> : null}
+                      {a.entered_at ? (
+                        <View style={styles.enteredTag}>
+                          <Ionicons name="checkmark-circle" size={14} color={colors.success} />
+                          <Text style={styles.enteredText}>Entrada confirmada às {new Date(a.entered_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</Text>
+                        </View>
+                      ) : null}
                     </View>
                     {a.status === 'ativa' ? (
                       <Pressable testID={`auth-cancel-${a.id}`} onPress={() => cancel(a.id)} hitSlop={8} style={styles.cancelBtn}>
@@ -251,6 +257,8 @@ const styles = StyleSheet.create({
   cardName: { color: colors.onSurface, fontSize: typography.lg, fontWeight: '700' },
   cancelled: { textDecorationLine: 'line-through', color: colors.onSurfaceTertiary },
   cardMeta: { color: colors.onSurfaceSecondary, fontSize: typography.sm, marginTop: 2 },
+  enteredTag: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: spacing.xs },
+  enteredText: { color: colors.success, fontSize: typography.sm, fontWeight: '700' },
   cancelBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   cancelText: { color: colors.error, fontSize: typography.sm, fontWeight: '700' },
   badgeCancel: { paddingHorizontal: spacing.md, paddingVertical: 4, borderRadius: radius.pill, backgroundColor: colors.surfaceTertiary },
