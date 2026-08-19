@@ -18,15 +18,19 @@ import * as Haptics from 'expo-haptics';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { DateField, DateHelpers } from '@/src/components/DateField';
 import { SelectField } from '@/src/components/SelectField';
-import { api, boatName } from '@/src/api';
+import { AppDialog } from '@/src/components/AppDialog';
+import { api, boatName, authValidityLabel } from '@/src/api';
 import type { User, Authorization } from '@/src/api';
+
+type ValidityType = 'data' | 'periodo' | 'recorrente';
+const VALIDITY_OPTIONS: { key: ValidityType; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+  { key: 'data', label: 'Data única', icon: 'calendar-outline' },
+  { key: 'periodo', label: 'Período', icon: 'calendar-number-outline' },
+  { key: 'recorrente', label: 'Sem validade', icon: 'infinite-outline' },
+];
 
 function toISODate(d: Date) {
   return `${d.getFullYear()}-${DateHelpers.pad(d.getMonth() + 1)}-${DateHelpers.pad(d.getDate())}`;
-}
-function formatBR(iso: string) {
-  const [y, m, d] = iso.split('-');
-  return `${d}/${m}/${y}`;
 }
 
 export default function AutorizarScreen() {
@@ -35,12 +39,16 @@ export default function AutorizarScreen() {
   const [boat, setBoat] = useState<string | null>(null);
   const [personName, setPersonName] = useState('');
   const [date, setDate] = useState<Date | null>(null);
+  const [validityType, setValidityType] = useState<ValidityType>('data');
+  const [startDate, setStartDate] = useState<Date | null>(null);
+  const [endDate, setEndDate] = useState<Date | null>(null);
   const [canLower, setCanLower] = useState(false);
   const [service, setService] = useState('');
   const [list, setList] = useState<Authorization[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successVisible, setSuccessVisible] = useState(false);
 
   const loadList = useCallback(async (cpf: string) => {
     try {
@@ -75,8 +83,23 @@ export default function AutorizarScreen() {
 
   const submit = async () => {
     setError(null);
-    if (!user || !boat || !personName.trim() || !date) {
-      setError('Preencha nome, lancha e data.');
+    if (!user || !boat || !personName.trim()) {
+      setError('Preencha o nome e a lancha.');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      return;
+    }
+    if (validityType === 'data' && !date) {
+      setError('Selecione a data da autorização.');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      return;
+    }
+    if (validityType === 'periodo' && (!startDate || !endDate)) {
+      setError('Selecione a data inicial e a final do período.');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      return;
+    }
+    if (validityType === 'periodo' && startDate && endDate && toISODate(endDate) < toISODate(startDate)) {
+      setError('A data final deve ser igual ou posterior à inicial.');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       return;
     }
@@ -86,16 +109,23 @@ export default function AutorizarScreen() {
         cpf: user.cpf,
         boat_name: boat,
         person_name: personName.trim(),
-        date: toISODate(date),
+        validity_type: validityType,
+        date: validityType === 'data' && date ? toISODate(date) : null,
+        start_date: validityType === 'periodo' && startDate ? toISODate(startDate) : null,
+        end_date: validityType === 'periodo' && endDate ? toISODate(endDate) : null,
         can_lower: canLower,
         service: service.trim() || null,
       });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setPersonName('');
       setDate(null);
+      setStartDate(null);
+      setEndDate(null);
+      setValidityType('data');
       setCanLower(false);
       setService('');
       await loadList(user.cpf);
+      setSuccessVisible(true);
     } catch (e: any) {
       setError(e.message || 'Erro ao autorizar.');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -150,14 +180,67 @@ export default function AutorizarScreen() {
                 placeholderTextColor={colors.onSurfaceTertiary}
               />
             </View>
-            <DateField
-              testID="autorizar-date-field"
-              label="Data autorizada"
-              mode="date"
-              value={date}
-              onChange={setDate}
-              minimumDate={new Date()}
-            />
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Validade da autorização</Text>
+              <View style={styles.validityRow}>
+                {VALIDITY_OPTIONS.map((opt) => {
+                  const active = validityType === opt.key;
+                  return (
+                    <Pressable
+                      key={opt.key}
+                      testID={`autorizar-validity-${opt.key}`}
+                      onPress={() => { setValidityType(opt.key); Haptics.selectionAsync(); }}
+                      style={[styles.validityBtn, active && styles.validityBtnActive]}
+                    >
+                      <Ionicons name={opt.icon} size={18} color={active ? colors.onBrandPrimary : colors.onSurfaceSecondary} />
+                      <Text style={[styles.validityText, active && styles.validityTextActive]}>{opt.label}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+
+            {validityType === 'data' ? (
+              <DateField
+                testID="autorizar-date-field"
+                label="Data autorizada"
+                mode="date"
+                value={date}
+                onChange={setDate}
+                minimumDate={new Date()}
+              />
+            ) : validityType === 'periodo' ? (
+              <View style={styles.row}>
+                <View style={{ flex: 1 }}>
+                  <DateField
+                    testID="autorizar-start-date-field"
+                    label="De"
+                    mode="date"
+                    value={startDate}
+                    onChange={setStartDate}
+                    minimumDate={new Date()}
+                  />
+                </View>
+                <View style={{ width: spacing.md }} />
+                <View style={{ flex: 1 }}>
+                  <DateField
+                    testID="autorizar-end-date-field"
+                    label="Até"
+                    mode="date"
+                    value={endDate}
+                    onChange={setEndDate}
+                    minimumDate={startDate || new Date()}
+                  />
+                </View>
+              </View>
+            ) : (
+              <View style={styles.recurringNote} testID="autorizar-recurring-note">
+                <Ionicons name="infinite-outline" size={18} color={colors.brandPrimary} />
+                <Text style={styles.recurringText}>
+                  Autorização recorrente: fica ativa todos os dias até você cancelar.
+                </Text>
+              </View>
+            )}
 
             <View style={styles.fieldGroup}>
               <Text style={styles.label}>Autorizado a descer a lancha?</Text>
@@ -205,7 +288,7 @@ export default function AutorizarScreen() {
                   <View key={a.id} style={styles.card} testID={`auth-${a.id}`}>
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.cardName, a.status === 'cancelada' && styles.cancelled]}>{a.person_name}</Text>
-                      <Text style={styles.cardMeta}>{a.boat_name} • {formatBR(a.date)}</Text>
+                      <Text style={styles.cardMeta}>{a.boat_name} • {authValidityLabel(a)}</Text>
                       <Text style={styles.cardMeta}>Descer a lancha: {a.can_lower ? 'Sim' : 'Não'}</Text>
                       {a.service ? <Text style={styles.cardMeta}>Serviço: {a.service}</Text> : null}
                       {a.entered_at ? (
@@ -230,6 +313,15 @@ export default function AutorizarScreen() {
           </ScrollView>
         )}
       </KeyboardAvoidingView>
+
+      <AppDialog
+        visible={successVisible}
+        testID="autorizar-success-dialog"
+        title="Autorização criada!"
+        message="A autorização foi registrada e já aparece na portaria da marina."
+        buttons={[{ label: 'OK', variant: 'primary', testID: 'autorizar-success-ok', onPress: () => setSuccessVisible(false) }]}
+        onRequestClose={() => setSuccessVisible(false)}
+      />
     </SafeAreaView>
   );
 }
@@ -241,7 +333,15 @@ const styles = StyleSheet.create({
   subtitle: { color: colors.onSurfaceSecondary, fontSize: typography.sm, marginTop: 2 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   content: { padding: spacing.lg, paddingBottom: 120 },
+  row: { flexDirection: 'row' },
   fieldGroup: { marginBottom: spacing.lg },
+  validityRow: { flexDirection: 'row', gap: spacing.sm },
+  validityBtn: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: spacing.md, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceSecondary },
+  validityBtnActive: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
+  validityText: { color: colors.onSurfaceSecondary, fontSize: typography.sm, fontWeight: '700' },
+  validityTextActive: { color: colors.onBrandPrimary },
+  recurringNote: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, padding: spacing.md, backgroundColor: colors.brandTertiary, borderRadius: radius.md, marginBottom: spacing.lg },
+  recurringText: { flex: 1, color: colors.onBrandTertiary, fontSize: typography.base, lineHeight: 20 },
   label: { color: colors.onSurface, fontSize: typography.base, fontWeight: '600', marginBottom: spacing.sm },
   input: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.lg, fontSize: typography.lg, color: colors.onSurface, backgroundColor: colors.surfaceSecondary },
   toggleRow: { flexDirection: 'row', gap: spacing.sm },

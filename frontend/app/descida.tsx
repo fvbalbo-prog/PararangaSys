@@ -21,6 +21,7 @@ import { SelectField } from '@/src/components/SelectField';
 import { TimeSlotField } from '@/src/components/TimeSlotField';
 import { TideChip } from '@/src/components/TideChip';
 import { TideSafetyBanner } from '@/src/components/TideSafetyBanner';
+import { AppDialog } from '@/src/components/AppDialog';
 import { tideHeightAt, type TidePoint } from '@/src/tide';
 import { api, boatName } from '@/src/api';
 import type { User } from '@/src/api';
@@ -50,6 +51,7 @@ export default function DescidaScreen() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successVisible, setSuccessVisible] = useState(false);
 
   const [date, setDate] = useState<Date | null>(null);
   const [bookingTime, setBookingTime] = useState<string | null>(null);
@@ -138,7 +140,7 @@ export default function DescidaScreen() {
         await api.createRequest(payload);
       }
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      router.back();
+      setSuccessVisible(true);
     } catch (e: any) {
       setError(e.message || 'Erro ao salvar.');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -330,6 +332,15 @@ export default function DescidaScreen() {
           </Pressable>
         </View>
       </KeyboardAvoidingView>
+
+      <AppDialog
+        visible={successVisible}
+        testID="descida-success-dialog"
+        title={editId ? 'Alterações salvas!' : 'Solicitação enviada com sucesso!'}
+        message={editId ? 'Sua descida foi atualizada.' : 'Sua solicitação de descida foi registrada e já aparece para a marina.'}
+        buttons={[{ label: 'OK', variant: 'primary', testID: 'descida-success-ok', onPress: () => { setSuccessVisible(false); router.back(); } }]}
+        onRequestClose={() => { setSuccessVisible(false); router.back(); }}
+      />
     </SafeAreaView>
   );
 }

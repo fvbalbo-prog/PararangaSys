@@ -1,0 +1,34 @@
+{
+  "summary": "Iteration 13 features fully validated. Backend pytest test_marina_iteration13.py: 14/14 passed — POST /api/authorizations with the 3 validity_type flavors ('data' requires date, 'periodo' requires start_date+end_date with end>=start, 'recorrente' accepts no dates), GET /api/authorizations returns the new fields (validity_type, start_date, end_date) on newly-created records, PATCH /api/authorizations/{id}/cancel works. Notifications: creating a descida for today at a future slot and PATCHing /requests/{id}/complete auto-creates a client notification (kind='descida', title contains 'água'), GET /api/notifications?cpf=... lists them (sorted by created_at desc), PATCH /notifications/{id}/read marks read, POST /notifications/read-all?cpf=... marks all read. Same flow verified for subida (kind='subida', 'seco'). Booking window rules confirmed (past date rejected, day-after-tomorrow rejected, tomorrow allowed at 17:30 subida unlimited slot). Frontend (mobile 390x844) end-to-end verified on web preview: (1) /autorizar screen — autorizar-validity-data/periodo/recorrente selectable, periodo reveals autorizar-start-date-field + autorizar-end-date-field, recorrente reveals autorizar-recurring-note; submit shows autorizar-success-dialog with autorizar-success-ok — WORKING; cancel via auth-cancel-{id} works. (2) /menu — menu-avisos bell + menu-fila items visible. (3) /avisos — after 3s render wait, 4 notification cards (aviso-{id}) render correctly with title/body/timestamp; badge auto-cleared when opening screen (readAll). (4) /fila screen loads (fila-screen visible). (5) /descida page loads with descida-submit-button (success dialog testID descida-success-dialog wired). (6) Admin dashboard reachable via admin-dashboard-button on /admin → shows Faturamento value (R$ 4.963,00), 6 stat cards (dashboard-stat-*), dash-prev-day/dash-next-day navigate day label. (7) /admin-relatorio — relatorio-search-input filters cards live: 'ZZZ_NOMATCH' → 0 consumo-* cards; 'João' → 1 card; relatorio-search-clear resets. No deprecated packages detected in the touched screens. No SafeAreaView issues (all screens use react-native-safe-area-context with edges).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_marina_iteration13.py",
+    "/app/test_reports/pytest/iteration13_results.xml"
+  ],
+  "action_items": [
+    "None blocking for iteration 13. Legacy authorization docs (created before this iter) lack validity_type/start_date/end_date fields — the API returns them as-is (no backfill). If admin UI relies on those fields, consider a one-shot backfill setting validity_type='data' and start_date=null/end_date=null for legacy records. Non-blocking; frontend already tolerates missing fields.",
+    "Optional carry-over: server.py is ~1400 lines; consider splitting into routers/ modules for maintainability."
+  ],
+  "critical_code_review_comments": [
+    "server.py:919-965 create_authorization correctly validates each validity_type: 'data' requires payload.date, 'periodo' requires start_date+end_date with end>=start (lexicographic YYYY-MM-DD comparison is safe), 'recorrente' clears date_val. start_date/end_date persisted; date_val also stored for backwards compat with old screens. Good.",
+    "server.py:305-316 create_notification writes {id, cpf, title, body, kind, read:false, created_at}. server.py:477-505 complete_request calls it with kind='descida' ('Lancha na água') or 'subida' ('Lancha no seco'), using boat_name from the request. Idempotent-safe.",
+    "server.py:509-528 notifications endpoints: GET /notifications filters by cpf & sorts by created_at desc (limit 200); PATCH /:nid/read sets read=true; POST /read-all sets read=true for all unread of a cpf. Simple and correct.",
+    "autorizar.tsx:191-262 validity radio group + conditional fields wired to testIDs autorizar-validity-*, autorizar-date-field, autorizar-start-date-field, autorizar-end-date-field, autorizar-recurring-note. Submit dispatches AppDialog testID autorizar-success-dialog with 'Autorização criada!' → autorizar-success-ok. Correct.",
+    "avisos.tsx:32-52 useFocusEffect loads /notifications and, if any unread, calls api.readAllNotifications so the bell badge auto-clears on visit. FlatList renders cards with testID aviso-{id}. Correct.",
+    "menu.tsx:23-28 items include 'Fila em Tempo Real' (menu-fila) and menu-avisos bell with menu-avisos-badge for unread count. Correct.",
+    "admin-dashboard.tsx:103-165 renders dashboard-faturamento + 6 stats (dashboard-stat-{label}) and prev/next day nav (dash-prev-day/dash-next-day). Uses GET /requests/day and computes stats client-side. Correct.",
+    "admin-relatorio.tsx:192-202 search filters visible clients via lowercase substring on name/cpf; relatorio-search-clear resets. Correct."
+  ],
+  "updated_files": ["/app/backend/tests/test_marina_iteration13.py (new)"],
+  "success_rate": {"backend": "100% (14/14)", "frontend": "100% (7/7 flows on 390x844 web preview)"},
+  "seed_data_creation": "Test run created a few authorizations for João (one was cancelled), 1 descida and 1 subida (both completed) which produced 2 in-app notifications. Notifications are marked read via read-all. All artifacts are historical/idempotent.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iter 13 keys: AuthorizationInput now has validity_type ('data'|'periodo'|'recorrente') + start_date + end_date. Backend validates each combination and stores start_date/end_date; legacy 'date' field is set to start_date for 'periodo' (compat). Notifications collection: {id, cpf, title, body, kind, read, created_at}. Auto-created on PATCH /requests/{id}/complete (kind='descida' → 'Lancha na água!', kind='subida' → 'Lancha no seco'). /notifications, /notifications/{id}/read, /notifications/read-all endpoints all working. Frontend: menu-avisos bell + optional menu-avisos-badge unread count; opening /avisos calls read-all. /fila uses api.dayRequests to compute position client-side. AppDialog used everywhere for confirmations (descida-success-dialog/subida-success-dialog/autorizar-success-dialog). Login inputs use testIDs cpf-input, phone-input, login-submit-button (NOT login-cpf-input as I initially assumed). FlatList in /avisos needs ~2-3s to hydrate on web preview — wait for it before asserting card count."
+}

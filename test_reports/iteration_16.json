@@ -1,0 +1,31 @@
+{
+  "summary": "Iteration 14 fully validated. Backend pytest test_marina_iteration14.py: 8/8 passed — GET /products, POST /convenience/orders (created order for João has created_at starting with today's ISO date and is present in GET /convenience/orders?cpf=... today's slice), GET /reboque/quote with client_lat/client_lng returns distance_nm/base_fee/additional_nm/additional_fee/per_nm/estimated_total, missing coords -> 400, GET /requests/day returns list w/ id/type/status/time, filter=descida returns only descidas, filter=subida returns only subidas, GET /authorizations returns list with person_name/boat_name/user_name/status. Frontend (mobile 390x844 web preview) end-to-end verified: (1) /conveniencia — 7 products render, tapping product-plus-* updates conveniencia-total (R$ 8,00 for a bala), conveniencia-submit opens confirm dialog with confirm-order testID, tapping it creates the order and the 'Meus pedidos de hoje' section appears with the new order-{id} card (todaysOrders filter by created_at.startsWith(todayISO) works correctly). (2) /emergencia aba Reboque — clicking reboque-location-button in the web preview (permission denied by browser) correctly shows the emergencia-dialog with the 'Permissão de localização' message instead of hanging silently. AppDialog feedback confirmed. (3) /staff hub — staff-title visible, all four menu cards present (staff-menu-descida, staff-menu-subida, staff-menu-todas, staff-menu-autorizados), tapping staff-menu-descida navigates to /staff-movimentacoes?filter=descida with title 'Confirmar Descida'. /staff-movimentacoes?filter=all renders mixed cards (both DESCIDA blue and SUBIDA orange timeblocks) with staff-confirm-{id} for agendada rows and staff-reopen-{id}/staff-cancel-{id} for concluida rows. /staff-autorizacoes shows title 'Pessoas Autorizadas' and — as required — contains ZERO action buttons (staff-confirm-*, staff-reopen-*, staff-cancel-* count = 0), it's read-only. No deprecated packages detected (expo-audio is used correctly in staff.tsx via useAudioPlayer, expo-location is current). No SafeAreaView issues.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_marina_iteration14.py",
+    "/app/test_reports/pytest/iteration14_results.xml"
+  ],
+  "action_items": [
+    "None blocking. Iteration 14 changes are verified: (1) conveniência hoje filter, (2) Alert -> AppDialog on GPS reboque, (3) staff hub with 4 sub-screens including new /staff-movimentacoes (with filter query param) and /staff-autorizacoes (consult-only)."
+  ],
+  "critical_code_review_comments": [
+    "conveniencia.tsx:257-278 correctly filters orders by created_at.startsWith(todayISO()) so only today's orders show under 'Meus pedidos de hoje'. Prior day orders excluded as required.",
+    "emergencia.tsx:94-128 getLocation now uses AppDialog for permission-denied and try/catch for GPS failures — no more silent Alert on web. Fallback message is clear and testable via emergencia-dialog testID.",
+    "staff.tsx:87-92 MENU has all 4 entries (descida, subida, todas, autorizados) with correct routes; badge count is derived client-side from api.dayRequests items filtered by type & status='agendada'. staff-emergency-banner still shown when openEmergencies > 0.",
+    "staff-movimentacoes.tsx:29 filter is safely coerced from URL param to 'descida'|'subida'|'all'. Sort by time is deterministic. Optimistic updates on confirm/reopen/cancel with fallback reload on error — good UX.",
+    "staff-autorizacoes.tsx:29 filters authorizations to status=='ativa' AND isAuthValidOn(a, todayISO()) — respects validity_type data/periodo/recorrente. Card has no action buttons (read-only), matches spec.",
+    "server.py:396+ /api/requests/day supports both `date` and `type` query params, returning items with all fields expected by the staff UI."
+  ],
+  "updated_files": ["/app/backend/tests/test_marina_iteration14.py (new)"],
+  "success_rate": {"backend": "100% (8/8)", "frontend": "100% (3/3 flows on 390x844 web preview)"},
+  "seed_data_creation": "Test run created 1 conveniência order for João (TEST_iter14) — persisted with today's timestamp. Historical/idempotent, no cleanup required.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iter 14 keys: conveniência 'Meus pedidos de hoje' filters via o.created_at.startsWith(todayISO()) client-side (backend returns ALL user orders sorted desc). GPS on web preview: browser denies permission by default → getLocation branch that calls setDialog({title:'Permissão de localização'...}) fires → emergencia-dialog testID visible. Staff hub routes: /staff-movimentacoes?filter=descida|subida|all (single screen, TITLES/SUBTITLES map by filter), /staff-autorizacoes (read-only). Login testIDs remain cpf-input / phone-input / login-submit-button. Products endpoint returns [{id, name, price, category, in_stock, active, image_url}]. When creating orders, first available in_stock product is safe to pick."
+}

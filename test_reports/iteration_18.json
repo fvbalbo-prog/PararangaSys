@@ -1,0 +1,31 @@
+{
+  "summary": "Iteration 18 - HUB Cadastros split into 3 sub-screens (Clientes, Lanchas, Funcionários). Backend pytest test_marina_iteration18.py: 10/10 PASSED. Frontend (mobile 390x844): 8/8 flows PASSED. Verified: (1) /admin-clientes hub renders 'Cadastros' title + 3 cards cadastros-menu-clientes/lanchas/funcionarios with counts. (2) /admin-cad-clientes lists ONLY is_staff=false users (11111 visible, 55555 not visible), new-client-button opens modal with client-cpf/name/phone inputs, save-client-button creates persisted card client-card-{cpf}; toggle-active-{cpf} opens AppDialog clientes-dialog with confirm-toggle-{cpf}. (3) /admin-cad-lanchas lists ONLY clients (11111 visible, 55555 not visible); add-boat-{cpf} opens modal (boat-name/draft/length + save-boat-button); remove-boat-{cpf}-{name} opens AppDialog lanchas-dialog with confirm-remove-boat-{cpf}-{name}. (4) /admin-cad-funcionarios lists ONLY is_staff=true (55555 visible, 11111 not visible); new-staff-button creates funcionário with is_staff=true and it does NOT leak into /admin-cad-clientes. Toggle uses funcionarios-dialog. (5) Backend endpoints GET /api/users, POST /api/users (with is_staff), POST /api/users/{cpf}/boats, DELETE /api/users/{cpf}/boats?boat=..., PATCH /api/users/{cpf}/active all return expected 200/409/404 codes; deactivated user cannot login (403). No deprecated packages detected. No SafeAreaView issues.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_marina_iteration18.py",
+    "/app/test_reports/pytest/iteration18_results.xml"
+  ],
+  "action_items": [
+    "None blocking. HUB Cadastros restructure is fully validated end-to-end. is_staff separation is correctly enforced in both frontend list filters and via backend list response."
+  ],
+  "critical_code_review_comments": [
+    "admin-clientes.tsx (hub): counts are computed from a single api.listUsers() call — no extra request. numLanchas sums boats from non-staff only (correct).",
+    "admin-cad-clientes.tsx: filter uses !c.is_staff and toggle-active dialog invokes api.setUserActive with optimistic state update + fallback reload on error (line 70). Good UX.",
+    "admin-cad-lanchas.tsx: filter uses !c.is_staff (line 49), so staff never gets boats added here even if backend allows it. Boat modal correctly parses draft/length as floats accepting comma decimals.",
+    "admin-cad-funcionarios.tsx: filter c.is_staff (line 51); createClient sent with is_staff=true (line 84). AppDialog testID='funcionarios-dialog' matches spec.",
+    "server.py:660-681 create_client: validates CPF length 11, 409 on duplicate CPF, stores is_staff bool. list_users filters is_admin!=true so admin 00000 never appears in Clientes hub — correct.",
+    "server.py:688-696 set_user_active correctly returns 404 for unknown CPF and 200 with updated user otherwise. Login endpoint (line 336) blocks deactivated users with 403 — verified in tests."
+  ],
+  "updated_files": ["/app/backend/tests/test_marina_iteration18.py (new)"],
+  "success_rate": {"backend": "100% (10/10)", "frontend": "100% (8/8 flows on 390x844)"},
+  "seed_data_creation": "Test run created 2 UI clients (CPF 93000000018 TEST UI iter18, 98111000018 from backend), 2 staff (CPF 94000000018, 98222000018), and no persistent boats (added/removed within tests). Deactivated leftovers via backend teardown; UI clients were toggled to Sem acesso. No CPFs of the seed (00000/11111/22222/33333/55555) were duplicated.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Hub is /admin-clientes (testID cadastros-title). The 3 sub-screens live at /admin-cad-clientes, /admin-cad-lanchas, /admin-cad-funcionarios. When testing modals on Expo web preview the save button of the bottom-sheet modal sometimes reports 'outside of viewport' with page.click — use `page.locator(sel).dispatch_event('click')` instead (worked reliably). All new AppDialog testIDs: clientes-dialog / lanchas-dialog / funcionarios-dialog. Confirm buttons inside them: confirm-toggle-{cpf} for activate/deactivate and confirm-remove-boat-{cpf}-{name} for boat removal. Cross-check that a user created with is_staff=true does NOT appear in /admin-cad-clientes list (filter !c.is_staff) and vice versa — this was validated. Backend seed on startup also seeds 55555 as is_staff=true. Deactivated CPFs from previous iterations still exist in DB (no delete-user endpoint) — this only affects the hub count pills, not functionality."
+}

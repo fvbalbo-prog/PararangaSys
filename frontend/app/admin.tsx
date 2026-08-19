@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -23,6 +23,7 @@ import { formatMoney } from '@/src/format';
 import { api } from '@/src/api';
 import type { MarinaRequest, RequestType } from '@/src/api';
 import { StatusBadge } from '@/src/components/StatusBadge';
+import { useAdminLayout } from '@/src/hooks/useAdminLayout';
 
 type Filter = 'todas' | RequestType;
 
@@ -48,6 +49,7 @@ const FILTERS: { key: Filter; label: string }[] = [
 
 export default function AdminScreen() {
   const router = useRouter();
+  const { isDesktop, ready, setMode: setLayoutMode } = useAdminLayout();
   const [day, setDay] = useState(new Date());
   const [filter, setFilter] = useState<Filter>('todas');
   const [mode, setMode] = useState<'lista' | 'quadro'>('lista');
@@ -107,6 +109,10 @@ export default function AdminScreen() {
     await AsyncStorage.removeItem('user');
     router.replace('/');
   };
+
+  useEffect(() => {
+    if (ready && isDesktop) router.replace('/admin-desktop');
+  }, [ready, isDesktop, router]);
 
   const doComplete = async (id: string) => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -256,10 +262,18 @@ export default function AdminScreen() {
           <Text style={styles.title} testID="admin-title">Movimentação do dia</Text>
         </View>
         <Pressable
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-dashboard'); }}
+          hitSlop={12}
+          testID="admin-dashboard-button"
+          style={styles.logoutBtn}
+        >
+          <Ionicons name="stats-chart-outline" size={22} color={colors.onBrandPrimary} />
+        </Pressable>
+        <Pressable
           onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-solicitacoes'); }}
           hitSlop={12}
           testID="admin-solicitacoes-button"
-          style={styles.logoutBtn}
+          style={[styles.logoutBtn, { marginLeft: spacing.sm }]}
         >
           <Ionicons name="receipt-outline" size={22} color={colors.onBrandPrimary} />
         </Pressable>
@@ -291,6 +305,14 @@ export default function AdminScreen() {
           style={[styles.logoutBtn, { marginLeft: spacing.sm }]}
         >
           <Ionicons name="people-outline" size={22} color={colors.onBrandPrimary} />
+        </Pressable>
+        <Pressable
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setLayoutMode('desktop'); }}
+          hitSlop={12}
+          testID="admin-desktop-toggle"
+          style={[styles.logoutBtn, { marginLeft: spacing.sm }]}
+        >
+          <Ionicons name="desktop-outline" size={22} color={colors.onBrandPrimary} />
         </Pressable>
         <Pressable onPress={handleLogout} hitSlop={12} testID="admin-logout" style={[styles.logoutBtn, { marginLeft: spacing.sm }]}>
           <Ionicons name="log-out-outline" size={22} color={colors.onBrandPrimary} />

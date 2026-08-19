@@ -302,6 +302,20 @@ def validate_request_payload(payload: RequestBase):
 
 
 # ===================== Routes =====================
+async def create_notification(cpf: str, title: str, body: str, kind: str = "info"):
+    """In-app notification for a client (no push)."""
+    doc = {
+        "id": str(uuid.uuid4()),
+        "cpf": normalize_cpf(cpf),
+        "title": title,
+        "body": body,
+        "kind": kind,
+        "read": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.notifications.insert_one(doc)
+
+
 @api_router.get("/")
 async def root():
     return {"message": "Marina Pararanga API"}
@@ -471,7 +485,47 @@ async def complete_request(request_id: str):
         {"id": request_id},
         {"$set": {"status": "concluida", "returned_at": now_iso, "updated_at": now_iso}},
     )
+    # Aviso ao cliente
+    if existing.get("cpf"):
+        boat = existing.get("boat_name") or "sua lancha"
+        if existing.get("type") == "descida":
+            await create_notification(
+                existing["cpf"],
+                "Lancha na água! 🌊",
+                f"A descida da {boat} foi confirmada. Ela já está na água.",
+                "descida",
+            )
+        else:
+            await create_notification(
+                existing["cpf"],
+                "Lancha no seco 🚤",
+                f"A subida da {boat} foi confirmada. Ela já está de volta no seco.",
+                "subida",
+            )
     return await db.requests.find_one({"id": request_id}, {"_id": 0})
+
+
+# ===================== Notificações (avisos in-app do cliente) =====================
+@api_router.get("/notifications")
+async def list_notifications(cpf: str):
+    docs = await db.notifications.find(
+        {"cpf": normalize_cpf(cpf)}, {"_id": 0}
+    ).sort("created_at", -1).to_list(200)
+    return docs
+
+
+@api_router.patch("/notifications/{nid}/read")
+async def read_notification(nid: str):
+    await db.notifications.update_one({"id": nid}, {"$set": {"read": True}})
+    return {"ok": True}
+
+
+@api_router.post("/notifications/read-all")
+async def read_all_notifications(cpf: str):
+    await db.notifications.update_many(
+        {"cpf": normalize_cpf(cpf), "read": {"$ne": True}}, {"$set": {"read": True}}
+    )
+    return {"ok": True}
 
 
 @api_router.patch("/requests/{request_id}/reopen", response_model=RequestOut)
@@ -707,6 +761,7 @@ class ConvenienceOrderInput(BaseModel):
     boat_name: Optional[str] = None
     items: List[OrderItem]
     observation: Optional[str] = None
+    delivery_method: Optional[str] = "balcao"  # "balcao" | "lancha"
 
 
 @api_router.get("/products")
@@ -820,6 +875,7 @@ async def create_order(payload: ConvenienceOrderInput):
         "items": [i.dict() for i in items],
         "total": total,
         "observation": payload.observation,
+        "delivery_method": payload.delivery_method if payload.delivery_method in ("balcao", "lancha") else "balcao",
         "status": "pendente",
         "created_at": now_iso,
         "updated_at": now_iso,
@@ -853,7 +909,11 @@ class AuthorizationInput(BaseModel):
     cpf: str
     boat_name: str
     person_name: str
-    date: str  # YYYY-MM-DD
+    # "data" (data única) | "periodo" (intervalo) | "recorrente" (sem validade)
+    validity_type: str = "data"
+    date: Optional[str] = None        # para "data"
+    start_date: Optional[str] = None  # para "periodo"
+    end_date: Optional[str] = None    # para "periodo"
     can_lower: bool = False
     service: Optional[str] = None
 
@@ -866,6 +926,24 @@ async def create_authorization(payload: AuthorizationInput):
         raise HTTPException(status_code=404, detail="CPF não cadastrado.")
     if not payload.person_name.strip():
         raise HTTPException(status_code=400, detail="Nome do autorizado é obrigatório.")
+    vtype = payload.validity_type if payload.validity_type in ("data", "periodo", "recorrente") else "data"
+    date_val = payload.date
+    start_date = None
+    end_date = None
+    if vtype == "data":
+        if not payload.date:
+            raise HTTPException(status_code=400, detail="Informe a data da autorização.")
+    elif vtype == "periodo":
+        if not payload.start_date or not payload.end_date:
+            raise HTTPException(status_code=400, detail="Informe a data inicial e final do período.")
+        if payload.end_date < payload.start_date:
+            raise HTTPException(status_code=400, detail="A data final deve ser igual ou posterior à inicial.")
+        start_date = payload.start_date
+        end_date = payload.end_date
+        date_val = payload.start_date  # compat: usado por telas antigas
+    else:  # recorrente
+        # sem validade: recorrente até o cliente cancelar
+        date_val = None
     now_iso = datetime.now(timezone.utc).isoformat()
     doc = {
         "id": str(uuid.uuid4()),
@@ -873,7 +951,10 @@ async def create_authorization(payload: AuthorizationInput):
         "user_name": user["name"],
         "boat_name": payload.boat_name,
         "person_name": payload.person_name.strip(),
-        "date": payload.date,
+        "validity_type": vtype,
+        "date": date_val,
+        "start_date": start_date,
+        "end_date": end_date,
         "can_lower": bool(payload.can_lower),
         "service": (payload.service or "").strip() or None,
         "status": "ativa",

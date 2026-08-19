@@ -17,7 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useAudioPlayer } from 'expo-audio';
 import { colors, spacing, radius, typography } from '@/src/theme';
-import { api } from '@/src/api';
+import { api, isAuthValidOn, authValidityLabel } from '@/src/api';
 import type { ConvenienceOrder, Authorization, Emergency } from '@/src/api';
 
 const alertSound = require('@/assets/sounds/alert.wav');
@@ -28,10 +28,6 @@ const fmt = (iso: string) =>
   new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 const fmtTime = (iso: string) =>
   new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-const fmtDate = (iso: string) => {
-  const [y, m, d] = iso.split('-');
-  return `${d}/${m}/${y}`;
-};
 
 export default function AdminSolicitacoesScreen() {
   const router = useRouter();
@@ -94,7 +90,7 @@ export default function AdminSolicitacoesScreen() {
   })();
   const visibleAuths =
     authScope === 'hoje'
-      ? auths.filter((a) => a.status === 'ativa' && a.date === todayISO)
+      ? auths.filter((a) => a.status === 'ativa' && isAuthValidOn(a, todayISO))
       : auths;
 
   // Caixa: totais de conveniência (pedidos não cancelados)
@@ -209,6 +205,10 @@ export default function AdminSolicitacoesScreen() {
                   <Text style={styles.cardTotal}>{money(item.total)}</Text>
                 </View>
                 <Text style={styles.cardMeta}>{item.items.map((i) => `${i.qty}x ${i.name}`).join(', ')}</Text>
+                <View style={styles.deliveryTag}>
+                  <Ionicons name={item.delivery_method === 'lancha' ? 'boat-outline' : 'storefront-outline'} size={13} color={colors.brandPrimary} />
+                  <Text style={styles.deliveryTagText}>{item.delivery_method === 'lancha' ? 'Entrega na lancha' : 'Retirada no balcão'}</Text>
+                </View>
                 {item.observation ? <Text style={styles.cardMeta}>Obs.: {item.observation}</Text> : null}
                 <Text style={styles.cardTime}>{fmt(item.created_at)}</Text>
                 {item.status === 'pendente' ? (
@@ -257,7 +257,7 @@ export default function AdminSolicitacoesScreen() {
               <View style={styles.card} testID={`auth-${item.id}`}>
                 <View style={styles.cardTop}>
                   <Text style={styles.cardName}>{item.person_name}</Text>
-                  <Text style={styles.cardMeta}>{fmtDate(item.date)}</Text>
+                  <Text style={styles.cardMeta}>{authValidityLabel(item)}</Text>
                 </View>
                 <Text style={styles.cardMeta}>Lancha: {item.boat_name} • Titular: {item.user_name}</Text>
                 <Text style={styles.cardMeta}>Descer a lancha: {item.can_lower ? 'Sim' : 'Não'}{item.service ? ` • Serviço: ${item.service}` : ''}</Text>
@@ -393,6 +393,8 @@ const styles = StyleSheet.create({
   cardName: { color: colors.onSurface, fontSize: typography.lg, fontWeight: '800' },
   cardTotal: { color: colors.onSurface, fontSize: typography.lg, fontWeight: '800' },
   cardMeta: { color: colors.onSurfaceSecondary, fontSize: typography.base, marginTop: 2 },
+  deliveryTag: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6, alignSelf: 'flex-start', backgroundColor: colors.brandTertiary, paddingHorizontal: spacing.sm, paddingVertical: 3, borderRadius: radius.pill },
+  deliveryTagText: { color: colors.brandPrimary, fontSize: typography.sm, fontWeight: '700' },
   cardTime: { color: colors.onSurfaceTertiary, fontSize: typography.sm, marginTop: 4 },
   actions: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: colors.border, marginTop: spacing.md },
   actionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs, paddingVertical: spacing.md },

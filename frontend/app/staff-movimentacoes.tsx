@@ -1,0 +1,182 @@
+import { useCallback, useState } from 'react';
+import { View, Text, StyleSheet, FlatList, Pressable, ActivityIndicator, RefreshControl } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Haptics from 'expo-haptics';
+import { colors, spacing, radius, typography } from '@/src/theme';
+import { api } from '@/src/api';
+import type { MarinaRequest } from '@/src/api';
+import { StatusBadge } from '@/src/components/StatusBadge';
+
+type Filter = 'descida' | 'subida' | 'all';
+
+const TITLES: Record<Filter, string> = {
+  descida: 'Confirmar Descida',
+  subida: 'Confirmar Subida',
+  all: 'Movimentações do dia',
+};
+const SUBTITLES: Record<Filter, string> = {
+  descida: 'Lanchas indo para a água',
+  subida: 'Lanchas voltando ao seco',
+  all: 'Todas as movimentações de hoje',
+};
+
+export default function StaffMovimentacoesScreen() {
+  const router = useRouter();
+  const params = useLocalSearchParams<{ filter?: string }>();
+  const filter: Filter = params.filter === 'descida' || params.filter === 'subida' ? params.filter : 'all';
+
+  const [items, setItems] = useState<MarinaRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const load = useCallback(async () => {
+    const raw = await AsyncStorage.getItem('user');
+    if (!raw) return router.replace('/');
+    try {
+      setItems(await api.dayRequests());
+    } catch {
+      setItems([]);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [router]);
+
+  useFocusEffect(
+    useCallback(() => {
+      setLoading(true);
+      load();
+      const interval = setInterval(load, 15000);
+      return () => clearInterval(interval);
+    }, [load])
+  );
+
+  const confirm = async (id: string) => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    const now = new Date().toISOString();
+    setItems((prev) => prev.map((r) => (r.id === id ? { ...r, status: 'concluida', returned_at: now } : r)));
+    try { await api.completeRequest(id); } catch { load(); }
+  };
+
+  const reopen = async (id: string) => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    setItems((prev) => prev.map((r) => (r.id === id ? { ...r, status: 'agendada', returned_at: null } : r)));
+    try { await api.reopenRequest(id); } catch { load(); }
+  };
+
+  const cancel = async (id: string) => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    setItems((prev) => prev.map((r) => (r.id === id ? { ...r, status: 'cancelada' } : r)));
+    try { await api.cancelRequest(id); } catch { load(); }
+  };
+
+  const sorted = [...items]
+    .filter((i) => filter === 'all' || i.type === filter)
+    .sort((a, b) => a.time.localeCompare(b.time));
+
+  return (
+    <SafeAreaView style={styles.root} edges={['top']} testID="staff-movimentacoes-screen">
+      <View style={styles.header}>
+        <Pressable onPress={() => router.back()} hitSlop={16} testID="back-button" style={styles.backBtn}>
+          <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
+        </Pressable>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.kicker}>FUNCIONÁRIOS</Text>
+          <Text style={styles.title} testID="movimentacoes-title">{TITLES[filter]}</Text>
+          <Text style={styles.sub}>{SUBTITLES[filter]}</Text>
+        </View>
+      </View>
+
+      <View style={styles.sheet}>
+        {loading ? (
+          <View style={styles.center}><ActivityIndicator color={colors.brandPrimary} /></View>
+        ) : sorted.length === 0 ? (
+          <View style={styles.center}>
+            <View style={styles.emptyIcon}><Ionicons name="boat-outline" size={44} color={colors.brandSecondary} /></View>
+            <Text style={styles.emptyTitle}>Nada por aqui hoje</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={sorted}
+            keyExtractor={(i) => i.id}
+            contentContainerStyle={styles.list}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={colors.brandPrimary} />}
+            renderItem={({ item }) => (
+              <View style={styles.card} testID={`staff-row-${item.id}`}>
+                <View style={styles.cardMain}>
+                  <View style={[styles.timeBlock, item.type === 'subida' && { backgroundColor: colors.brandSecondary }]}>
+                    <Text style={styles.timeText}>{item.time}</Text>
+                    <Text style={styles.timeLabel}>{item.type === 'descida' ? 'DESCIDA' : 'SUBIDA'}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.boat} numberOfLines={1}>{item.boat_name}</Text>
+                    <Text style={styles.meta} numberOfLines={1}>{item.user_name}</Text>
+                    <View style={{ marginTop: spacing.sm }}><StatusBadge status={item.status} /></View>
+                  </View>
+                </View>
+                {item.status === 'agendada' ? (
+                  <Pressable
+                    testID={`staff-confirm-${item.id}`}
+                    style={({ pressed }) => [styles.confirmBtn, pressed && { opacity: 0.85 }]}
+                    onPress={() => confirm(item.id)}
+                  >
+                    <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
+                    <Text style={styles.confirmText}>Confirmar {item.type === 'descida' ? 'descida' : 'subida'}</Text>
+                  </Pressable>
+                ) : item.status === 'concluida' ? (
+                  <View style={styles.correctRow}>
+                    <Pressable
+                      testID={`staff-reopen-${item.id}`}
+                      style={({ pressed }) => [styles.correctBtn, { borderRightWidth: 1, borderRightColor: colors.border }, pressed && { opacity: 0.85 }]}
+                      onPress={() => reopen(item.id)}
+                    >
+                      <Ionicons name="arrow-undo-outline" size={16} color={colors.info} />
+                      <Text style={[styles.correctText, { color: colors.info }]}>Voltar p/ Aguardando</Text>
+                    </Pressable>
+                    <Pressable
+                      testID={`staff-cancel-${item.id}`}
+                      style={({ pressed }) => [styles.correctBtn, pressed && { opacity: 0.85 }]}
+                      onPress={() => cancel(item.id)}
+                    >
+                      <Ionicons name="close-circle-outline" size={16} color={colors.error} />
+                      <Text style={[styles.correctText, { color: colors.error }]}>Cancelar</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+              </View>
+            )}
+          />
+        )}
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: colors.brandPrimary },
+  header: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.xl, paddingTop: spacing.md, paddingBottom: spacing.lg },
+  backBtn: { padding: spacing.sm, borderRadius: radius.pill, backgroundColor: 'rgba(255,255,255,0.08)' },
+  kicker: { color: colors.brandSecondary, letterSpacing: 3, fontSize: 11, fontWeight: '700' },
+  title: { color: colors.onBrandPrimary, fontSize: 22, fontWeight: '800', marginTop: 4 },
+  sub: { color: colors.onBrandPrimary, opacity: 0.8, fontSize: typography.sm, marginTop: 2 },
+  sheet: { flex: 1, backgroundColor: colors.surface, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingTop: spacing.lg },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl },
+  emptyIcon: { width: 88, height: 88, borderRadius: 44, backgroundColor: colors.brandTertiary, alignItems: 'center', justifyContent: 'center', marginBottom: spacing.lg },
+  emptyTitle: { color: colors.onSurface, fontSize: typography.xl, fontWeight: '700' },
+  list: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xxxl, gap: spacing.md },
+  card: { backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, overflow: 'hidden' },
+  cardMain: { flexDirection: 'row', gap: spacing.md, padding: spacing.md },
+  timeBlock: { backgroundColor: colors.brandPrimary, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radius.sm, alignItems: 'center', minWidth: 72, alignSelf: 'flex-start' },
+  timeText: { color: colors.onBrandPrimary, fontSize: typography.lg, fontWeight: '800' },
+  timeLabel: { color: '#FFFFFF', fontSize: 10, fontWeight: '700', letterSpacing: 1, opacity: 0.9 },
+  boat: { color: colors.onSurface, fontSize: typography.lg, fontWeight: '800' },
+  meta: { color: colors.onSurfaceSecondary, fontSize: typography.sm, marginTop: 2 },
+  confirmBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, backgroundColor: colors.success, paddingVertical: spacing.md },
+  confirmText: { color: '#FFFFFF', fontSize: typography.base, fontWeight: '700' },
+  correctRow: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: colors.border },
+  correctBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs, paddingVertical: spacing.md },
+  correctText: { fontSize: typography.sm, fontWeight: '700' },
+});

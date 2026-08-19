@@ -24,6 +24,12 @@ import { AppDialog, type DialogButton } from '@/src/components/AppDialog';
 
 import { formatMoney as money } from '@/src/format';
 
+function todayISO() {
+  const d = new Date();
+  const p = (n: number) => n.toString().padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 const STATUS_LABEL: Record<string, string> = {
   pendente: 'Pendente',
   entregue: 'Entregue',
@@ -41,6 +47,7 @@ export default function ConvenienciaScreen() {
   const [products, setProducts] = useState<Product[]>([]);
   const [qty, setQty] = useState<Record<string, number>>({});
   const [observation, setObservation] = useState('');
+  const [delivery, setDelivery] = useState<'balcao' | 'lancha'>('balcao');
   const [orders, setOrders] = useState<ConvenienceOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -108,10 +115,12 @@ export default function ConvenienciaScreen() {
         boat_name: firstBoat,
         items: selected.map((p) => ({ product_id: p.id, name: p.name, price: p.price, qty: qty[p.id] })),
         observation: observation.trim() || null,
+        delivery_method: delivery,
       });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setQty({});
       setObservation('');
+      setDelivery('balcao');
       await loadOrders(user.cpf);
       setDialog({
         title: 'Pedido realizado!',
@@ -234,6 +243,26 @@ export default function ConvenienciaScreen() {
               })
             )}
 
+            <Text style={[styles.sectionLabel, { marginTop: spacing.xl }]}>Como você quer receber?</Text>
+            <View style={styles.deliveryRow}>
+              <Pressable
+                testID="delivery-balcao"
+                onPress={() => { setDelivery('balcao'); Haptics.selectionAsync(); }}
+                style={[styles.deliveryBtn, delivery === 'balcao' && styles.deliveryBtnActive]}
+              >
+                <Ionicons name="storefront-outline" size={22} color={delivery === 'balcao' ? colors.onBrandPrimary : colors.onSurfaceSecondary} />
+                <Text style={[styles.deliveryText, delivery === 'balcao' && styles.deliveryTextActive]}>Retirada no balcão</Text>
+              </Pressable>
+              <Pressable
+                testID="delivery-lancha"
+                onPress={() => { setDelivery('lancha'); Haptics.selectionAsync(); }}
+                style={[styles.deliveryBtn, delivery === 'lancha' && styles.deliveryBtnActive]}
+              >
+                <Ionicons name="boat-outline" size={22} color={delivery === 'lancha' ? colors.onBrandPrimary : colors.onSurfaceSecondary} />
+                <Text style={[styles.deliveryText, delivery === 'lancha' && styles.deliveryTextActive]}>Entrega na lancha</Text>
+              </Pressable>
+            </View>
+
             <Text style={[styles.sectionLabel, { marginTop: spacing.xl }]}>Observação</Text>
             <TextInput
               testID="conveniencia-observation"
@@ -248,25 +277,32 @@ export default function ConvenienciaScreen() {
 
             {error ? <Text style={styles.errorText} testID="conveniencia-error">{error}</Text> : null}
 
-            {orders.length > 0 ? (
-              <>
-                <Text style={[styles.sectionLabel, { marginTop: spacing.xl }]}>Meus pedidos</Text>
-                {orders.map((o) => (
-                  <View key={o.id} style={styles.orderCard} testID={`order-${o.id}`}>
-                    <View style={styles.orderTop}>
-                      <Text style={styles.orderTotal}>{money(o.total)}</Text>
-                      <View style={[styles.badge, { backgroundColor: STATUS_COLOR[o.status] }]}>
-                        <Text style={styles.badgeText}>{STATUS_LABEL[o.status]}</Text>
+            {(() => {
+              const todaysOrders = orders.filter((o) => (o.created_at || '').startsWith(todayISO()));
+              return todaysOrders.length > 0 ? (
+                <>
+                  <Text style={[styles.sectionLabel, { marginTop: spacing.xl }]}>Meus pedidos de hoje</Text>
+                  {todaysOrders.map((o) => (
+                    <View key={o.id} style={styles.orderCard} testID={`order-${o.id}`}>
+                      <View style={styles.orderTop}>
+                        <Text style={styles.orderTotal}>{money(o.total)}</Text>
+                        <View style={[styles.badge, { backgroundColor: STATUS_COLOR[o.status] }]}>
+                          <Text style={styles.badgeText}>{STATUS_LABEL[o.status]}</Text>
+                        </View>
                       </View>
+                      <Text style={styles.orderItems} numberOfLines={2}>
+                        {o.items.map((i) => `${i.qty}x ${i.name}`).join(', ')}
+                      </Text>
+                      <View style={styles.orderDelivery}>
+                        <Ionicons name={o.delivery_method === 'lancha' ? 'boat-outline' : 'storefront-outline'} size={13} color={colors.brandPrimary} />
+                        <Text style={styles.orderDeliveryText}>{o.delivery_method === 'lancha' ? 'Entrega na lancha' : 'Retirada no balcão'}</Text>
+                      </View>
+                      {o.observation ? <Text style={styles.orderObs}>Obs.: {o.observation}</Text> : null}
                     </View>
-                    <Text style={styles.orderItems} numberOfLines={2}>
-                      {o.items.map((i) => `${i.qty}x ${i.name}`).join(', ')}
-                    </Text>
-                    {o.observation ? <Text style={styles.orderObs}>Obs.: {o.observation}</Text> : null}
-                  </View>
-                ))}
-              </>
-            ) : null}
+                  ))}
+                </>
+              ) : null;
+            })()}
           </ScrollView>
         )}
 
@@ -333,6 +369,13 @@ const styles = StyleSheet.create({
   orderTotal: { color: colors.onSurface, fontSize: typography.lg, fontWeight: '800' },
   orderItems: { color: colors.onSurfaceSecondary, fontSize: typography.base },
   orderObs: { color: colors.onSurfaceTertiary, fontSize: typography.sm, marginTop: 2 },
+  orderDelivery: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
+  orderDeliveryText: { color: colors.brandPrimary, fontSize: typography.sm, fontWeight: '700' },
+  deliveryRow: { flexDirection: 'row', gap: spacing.md },
+  deliveryBtn: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.xs, paddingVertical: spacing.lg, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceSecondary },
+  deliveryBtnActive: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
+  deliveryText: { color: colors.onSurfaceSecondary, fontSize: typography.sm, fontWeight: '700', textAlign: 'center' },
+  deliveryTextActive: { color: colors.onBrandPrimary },
   badge: { paddingHorizontal: spacing.md, paddingVertical: 4, borderRadius: radius.pill },
   badgeText: { color: '#FFFFFF', fontSize: typography.sm, fontWeight: '700' },
   footer: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: colors.surface, padding: spacing.lg, borderTopWidth: 1, borderTopColor: colors.divider },

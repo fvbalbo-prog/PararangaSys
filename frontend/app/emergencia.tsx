@@ -7,7 +7,6 @@ import {
   TextInput,
   Pressable,
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
   Platform,
   Linking,
@@ -40,7 +39,7 @@ function boatLength(boats: Boat[] | undefined, name: string | null): number | nu
 export default function EmergenciaScreen() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
-  const [tab, setTab] = useState<'socorro' | 'reboque'>('socorro');
+  const [reboque, setReboque] = useState<'sim' | 'nao'>('nao');
   const [location, setLocation] = useState('');
   const [observation, setObservation] = useState('');
   const [list, setList] = useState<Emergency[]>([]);
@@ -52,7 +51,6 @@ export default function EmergenciaScreen() {
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [quote, setQuote] = useState<ReboqueQuote | null>(null);
   const [locating, setLocating] = useState(false);
-  const [rebObs, setRebObs] = useState('');
   const [dialog, setDialog] = useState<{ title: string; message?: string; buttons: DialogButton[] } | null>(null);
   const closeDialog = () => setDialog(null);
   const showInfo = (title: string, message?: string) =>
@@ -94,26 +92,26 @@ export default function EmergenciaScreen() {
 
   const getLocation = async () => {
     Haptics.selectionAsync();
-    const perm = await Location.getForegroundPermissionsAsync();
-    let status = perm.status;
-    if (status !== 'granted') {
-      if (perm.canAskAgain) {
-        const req = await Location.requestForegroundPermissionsAsync();
-        status = req.status;
-      }
-      if (status !== 'granted') {
-        Alert.alert(
-          'Permissão necessária',
-          'Precisamos da sua localização para calcular a distância do reboque.',
-          [
-            { text: 'Cancelar', style: 'cancel' },
-            { text: 'Abrir Ajustes', onPress: () => Linking.openSettings() },
-          ]
-        );
-        return;
-      }
-    }
     try {
+      const perm = await Location.getForegroundPermissionsAsync();
+      let status = perm.status;
+      if (status !== 'granted') {
+        if (perm.canAskAgain) {
+          const req = await Location.requestForegroundPermissionsAsync();
+          status = req.status;
+        }
+        if (status !== 'granted') {
+          setDialog({
+            title: 'Permissão de localização',
+            message: 'Precisamos da sua localização para calcular a distância do reboque. Autorize o acesso à localização para continuar.',
+            buttons: [
+              { label: 'Agora não', variant: 'cancel', onPress: closeDialog },
+              { label: 'Abrir Ajustes', variant: 'primary', onPress: () => { closeDialog(); Linking.openSettings().catch(() => {}); } },
+            ],
+          });
+          return;
+        }
+      }
       setLocating(true);
       const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       const lat = pos.coords.latitude;
@@ -122,7 +120,7 @@ export default function EmergenciaScreen() {
       await fetchQuote(lat, lng);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch {
-      Alert.alert('Erro', 'Não foi possível obter sua localização.');
+      showInfo('Não foi possível obter a localização', 'Verifique se o GPS/localização está ativado e tente novamente.');
     } finally {
       setLocating(false);
     }
@@ -134,23 +132,40 @@ export default function EmergenciaScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boat]);
 
-  const dispatchSocorro = async () => {
+  const dispatchSend = async () => {
     if (!user) return;
-    const firstBoat = user.boats && user.boats.length ? boatName(user.boats[0]) : user.boat_name;
+    const firstBoat = boat || (user.boats && user.boats.length ? boatName(user.boats[0]) : user.boat_name);
     try {
       setSending(true);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-      await api.createEmergency({
-        cpf: user.cpf,
-        boat_name: firstBoat,
-        location: location.trim() || null,
-        observation: observation.trim() || null,
-      });
+      if (reboque === 'sim' && coords) {
+        await api.createReboque({
+          cpf: user.cpf,
+          boat_name: firstBoat,
+          client_lat: coords.lat,
+          client_lng: coords.lng,
+          location: location.trim(),
+          observation: observation.trim() || null,
+        });
+      } else {
+        await api.createEmergency({
+          cpf: user.cpf,
+          boat_name: firstBoat,
+          location: location.trim(),
+          observation: observation.trim() || null,
+        });
+      }
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setLocation('');
       setObservation('');
+      setReboque('nao');
+      setCoords(null);
+      setQuote(null);
       await loadList(user.cpf);
-      showInfo('Mensagem enviada com sucesso!', 'A equipe da marina foi notificada e entrará em contato.');
+      showInfo(
+        reboque === 'sim' ? 'Emergência com reboque enviada!' : 'Emergência enviada com sucesso!',
+        'A equipe da marina foi notificada e entrará em contato.'
+      );
     } catch (e: any) {
       showInfo('Erro', e.message || 'Não foi possível enviar a emergência.');
     } finally {
@@ -158,52 +173,22 @@ export default function EmergenciaScreen() {
     }
   };
 
-  const confirmSocorro = () => {
+  const confirmSend = () => {
+    if (!location.trim()) { showInfo('Localização obrigatória', 'Informe onde você está para a equipe te encontrar.'); return; }
+    if (!observation.trim()) { showInfo('Descrição obrigatória', 'Descreva o que está acontecendo.'); return; }
+    if (reboque === 'sim' && (!coords || !quote)) {
+      showInfo('Localização do reboque', 'Toque em "Usar minha localização" para calcular o valor do reboque.');
+      return;
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     setDialog({
       title: 'Acionar emergência?',
-      message: 'A equipe da marina será notificada imediatamente com seus dados e da sua lancha.',
+      message: reboque === 'sim' && quote
+        ? `A equipe será notificada.\n\nReboque solicitado — valor estimado: ${money(quote.estimated_total)} (${quote.distance_nm} MN). O valor final será lançado na sua conta.`
+        : 'A equipe da marina será notificada imediatamente com seus dados e da sua lancha.',
       buttons: [
         { label: 'Cancelar', variant: 'cancel', onPress: closeDialog },
-        { label: 'Acionar', variant: 'destructive', testID: 'confirm-socorro', onPress: () => { closeDialog(); dispatchSocorro(); } },
-      ],
-    });
-  };
-
-  const dispatchReboque = async () => {
-    if (!user || !boat || !coords) return;
-    try {
-      setSending(true);
-      await api.createReboque({
-        cpf: user.cpf,
-        boat_name: boat,
-        client_lat: coords.lat,
-        client_lng: coords.lng,
-        observation: rebObs.trim() || null,
-      });
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setCoords(null);
-      setQuote(null);
-      setRebObs('');
-      await loadList(user.cpf);
-      showInfo('Reboque solicitado com sucesso!', 'A equipe da marina foi notificada. O valor final será lançado na sua conta.');
-    } catch (e: any) {
-      showInfo('Erro', e.message || 'Não foi possível solicitar o reboque.');
-    } finally {
-      setSending(false);
-    }
-  };
-
-  const confirmReboque = () => {
-    if (!boat) { showInfo('Selecione a lancha'); return; }
-    if (!coords || !quote) { showInfo('Localização necessária', 'Toque em "Usar minha localização" para calcular a distância.'); return; }
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setDialog({
-      title: 'Confirmar reboque?',
-      message: `Distância: ${quote.distance_nm} MN\nValor estimado: ${money(quote.estimated_total)}\n\nApós a confirmação, a equipe será acionada e o valor final será lançado na sua conta.`,
-      buttons: [
-        { label: 'Não', variant: 'cancel', onPress: closeDialog },
-        { label: 'Sim, confirmar', variant: 'primary', testID: 'confirm-reboque', onPress: () => { closeDialog(); dispatchReboque(); } },
+        { label: 'Acionar', variant: 'destructive', testID: 'confirm-socorro', onPress: () => { closeDialog(); dispatchSend(); } },
       ],
     });
   };
@@ -241,55 +226,57 @@ export default function EmergenciaScreen() {
         </View>
       </View>
 
-      <View style={styles.tabs}>
-        <Pressable testID="tab-socorro" onPress={() => { setTab('socorro'); Haptics.selectionAsync(); }} style={[styles.tab, tab === 'socorro' && styles.tabActive]}>
-          <Ionicons name="alert-circle-outline" size={18} color={tab === 'socorro' ? colors.onBrandPrimary : colors.onSurfaceSecondary} />
-          <Text style={[styles.tabText, tab === 'socorro' && styles.tabTextActive]}>Socorro</Text>
-        </Pressable>
-        <Pressable testID="tab-reboque" onPress={() => { setTab('reboque'); Haptics.selectionAsync(); }} style={[styles.tab, tab === 'reboque' && styles.tabActive]}>
-          <Ionicons name="boat-outline" size={18} color={tab === 'reboque' ? colors.onBrandPrimary : colors.onSurfaceSecondary} />
-          <Text style={[styles.tabText, tab === 'reboque' && styles.tabTextActive]}>Reboque</Text>
-        </Pressable>
-      </View>
-
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={20}>
         {loading ? (
           <View style={styles.center}><ActivityIndicator color={colors.brandPrimary} /></View>
         ) : (
           <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-            {tab === 'socorro' ? (
-              <>
-                <Pressable testID="emergencia-button" onPress={confirmSocorro} disabled={sending} style={({ pressed }) => [styles.sosButton, pressed && { opacity: 0.9 }]}>
-                  {sending ? (
-                    <ActivityIndicator color="#FFFFFF" size="large" />
-                  ) : (
-                    <>
-                      <Ionicons name="alert-circle" size={56} color="#FFFFFF" />
-                      <Text style={styles.sosText}>ACIONAR EMERGÊNCIA</Text>
-                      <Text style={styles.sosSub}>Toque para notificar a marina</Text>
-                    </>
-                  )}
+            <View style={styles.sosBanner}>
+              <Ionicons name="alert-circle" size={40} color="#FFFFFF" />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.sosBannerTitle}>Acionar emergência</Text>
+                <Text style={styles.sosBannerSub}>Preencha os dados abaixo. A equipe será notificada na hora.</Text>
+              </View>
+            </View>
+
+            {boatOptions.length > 1 ? (
+              <SelectField testID="emergencia-boat-select" label="Lancha" value={boat} options={boatOptions} onChange={setBoat} placeholder="Selecione a lancha" />
+            ) : null}
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Localização <Text style={styles.req}>*</Text></Text>
+              <TextInput testID="emergencia-location" style={styles.input} value={location} onChangeText={setLocation} placeholder="Ex.: Próximo à Ilha do Campeche" placeholderTextColor={colors.onSurfaceTertiary} />
+            </View>
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Descrição <Text style={styles.req}>*</Text></Text>
+              <TextInput testID="emergencia-observation" style={[styles.input, styles.textarea]} value={observation} onChangeText={setObservation} placeholder="O que está acontecendo?" placeholderTextColor={colors.onSurfaceTertiary} multiline textAlignVertical="top" />
+            </View>
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Precisa de reboque?</Text>
+              <View style={styles.segment}>
+                <Pressable testID="reboque-nao" onPress={() => { setReboque('nao'); Haptics.selectionAsync(); }} style={[styles.segmentBtn, reboque === 'nao' && styles.segmentBtnActive]}>
+                  <Ionicons name="close-circle-outline" size={18} color={reboque === 'nao' ? colors.onBrandPrimary : colors.onSurfaceSecondary} />
+                  <Text style={[styles.segmentText, reboque === 'nao' && styles.segmentTextActive]}>Não</Text>
                 </Pressable>
-                <View style={styles.fieldGroup}>
-                  <Text style={styles.label}>Localização (opcional)</Text>
-                  <TextInput testID="emergencia-location" style={styles.input} value={location} onChangeText={setLocation} placeholder="Ex.: Próximo à Ilha do Campeche" placeholderTextColor={colors.onSurfaceTertiary} />
-                </View>
-                <View style={styles.fieldGroup}>
-                  <Text style={styles.label}>Descrição (opcional)</Text>
-                  <TextInput testID="emergencia-observation" style={[styles.input, styles.textarea]} value={observation} onChangeText={setObservation} placeholder="O que está acontecendo?" placeholderTextColor={colors.onSurfaceTertiary} multiline textAlignVertical="top" />
-                </View>
-              </>
-            ) : (
-              <>
-                <SelectField testID="reboque-boat-select" label="Lancha" value={boat} options={boatOptions} onChange={setBoat} placeholder="Selecione a lancha" />
+                <Pressable testID="reboque-sim" onPress={() => { setReboque('sim'); Haptics.selectionAsync(); }} style={[styles.segmentBtn, reboque === 'sim' && styles.segmentBtnActive]}>
+                  <Ionicons name="boat-outline" size={18} color={reboque === 'sim' ? colors.onBrandPrimary : colors.onSurfaceSecondary} />
+                  <Text style={[styles.segmentText, reboque === 'sim' && styles.segmentTextActive]}>Sim</Text>
+                </Pressable>
+              </View>
+              <Text style={styles.hint}>Opcional. Selecione &quot;Sim&quot; para ver o valor estimado do reboque.</Text>
+            </View>
+
+            {reboque === 'sim' ? (
+              <View style={styles.reboqueBox}>
                 <Text style={styles.hint}>
-                  {selectedLength != null ? `Comprimento: ${selectedLength} pés` : 'Comprimento não cadastrado — usando maior faixa.'}
+                  {selectedLength != null ? `Lancha: ${selectedLength} pés` : 'Comprimento não cadastrado — usando maior faixa.'}
                 </Text>
                 <Pressable testID="reboque-location-button" onPress={getLocation} disabled={locating} style={({ pressed }) => [styles.gpsBtn, pressed && { opacity: 0.9 }]}>
                   {locating ? <ActivityIndicator color={colors.brandPrimary} /> : <><Ionicons name="navigate" size={18} color={colors.brandPrimary} /><Text style={styles.gpsBtnText}>{coords ? 'Atualizar minha localização' : 'Usar minha localização'}</Text></>}
                 </Pressable>
                 <Text style={styles.hint}>Usamos seu GPS para calcular a distância até a marina. As primeiras 5 MN estão inclusas.</Text>
-
                 {quote ? (
                   <View style={styles.quoteCard} testID="reboque-quote">
                     <View style={styles.quoteRow}><Text style={styles.quoteLabel}>Distância</Text><Text style={styles.quoteVal}>{quote.distance_nm} MN</Text></View>
@@ -299,16 +286,12 @@ export default function EmergenciaScreen() {
                     <View style={styles.quoteRow}><Text style={styles.quoteTotalLabel}>Valor estimado</Text><Text style={styles.quoteTotalVal} testID="reboque-total">{money(quote.estimated_total)}</Text></View>
                   </View>
                 ) : null}
+              </View>
+            ) : null}
 
-                <View style={styles.fieldGroup}>
-                  <Text style={styles.label}>Observação (opcional)</Text>
-                  <TextInput testID="reboque-observation" style={[styles.input, styles.textarea]} value={rebObs} onChangeText={setRebObs} placeholder="Detalhes da situação" placeholderTextColor={colors.onSurfaceTertiary} multiline textAlignVertical="top" />
-                </View>
-                <Pressable testID="reboque-submit" onPress={confirmReboque} disabled={sending} style={({ pressed }) => [styles.reboqueBtn, pressed && { opacity: 0.9 }]}>
-                  {sending ? <ActivityIndicator color="#FFFFFF" /> : <><Ionicons name="boat" size={20} color="#FFFFFF" /><Text style={styles.reboqueBtnText}>Solicitar reboque</Text></>}
-                </Pressable>
-              </>
-            )}
+            <Pressable testID="emergencia-button" onPress={confirmSend} disabled={sending} style={({ pressed }) => [styles.sendBtn, pressed && { opacity: 0.9 }]}>
+              {sending ? <ActivityIndicator color="#FFFFFF" /> : <><Ionicons name="alert-circle" size={22} color="#FFFFFF" /><Text style={styles.sendBtnText}>ACIONAR EMERGÊNCIA</Text></>}
+            </Pressable>
 
             {list.length > 0 ? (
               <>
@@ -365,16 +348,20 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', padding: spacing.lg, gap: spacing.md },
   title: { color: colors.onSurface, fontSize: typography.xxl, fontWeight: '800' },
   subtitle: { color: colors.onSurfaceSecondary, fontSize: typography.sm, marginTop: 2 },
-  tabs: { flexDirection: 'row', gap: spacing.sm, marginHorizontal: spacing.lg, marginBottom: spacing.md, backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, padding: spacing.xs },
-  tab: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs, paddingVertical: spacing.md, borderRadius: radius.sm },
-  tabActive: { backgroundColor: colors.brandPrimary },
-  tabText: { color: colors.onSurfaceSecondary, fontSize: typography.base, fontWeight: '700' },
-  tabTextActive: { color: colors.onBrandPrimary },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   content: { padding: spacing.lg, paddingBottom: 120 },
-  sosButton: { backgroundColor: colors.error, borderRadius: radius.lg, paddingVertical: spacing.xxl, alignItems: 'center', justifyContent: 'center', marginBottom: spacing.xl, minHeight: 200 },
-  sosText: { color: '#FFFFFF', fontSize: typography.xl, fontWeight: '800', marginTop: spacing.md, letterSpacing: 1 },
-  sosSub: { color: '#FFFFFF', opacity: 0.85, fontSize: typography.base, marginTop: spacing.xs },
+  sosBanner: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: colors.error, borderRadius: radius.md, padding: spacing.lg, marginBottom: spacing.xl },
+  sosBannerTitle: { color: '#FFFFFF', fontSize: typography.xl, fontWeight: '800' },
+  sosBannerSub: { color: '#FFFFFF', opacity: 0.9, fontSize: typography.sm, marginTop: 2, lineHeight: 18 },
+  req: { color: colors.error, fontWeight: '800' },
+  segment: { flexDirection: 'row', gap: spacing.sm, backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, padding: spacing.xs },
+  segmentBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs, paddingVertical: spacing.md, borderRadius: radius.sm },
+  segmentBtnActive: { backgroundColor: colors.brandPrimary },
+  segmentText: { color: colors.onSurfaceSecondary, fontSize: typography.base, fontWeight: '700' },
+  segmentTextActive: { color: colors.onBrandPrimary },
+  reboqueBox: { backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.lg, marginBottom: spacing.lg },
+  sendBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, backgroundColor: colors.error, paddingVertical: spacing.lg, borderRadius: radius.md, marginTop: spacing.sm },
+  sendBtnText: { color: '#FFFFFF', fontSize: typography.lg, fontWeight: '800', letterSpacing: 0.5 },
   fieldGroup: { marginBottom: spacing.lg },
   label: { color: colors.onSurface, fontSize: typography.base, fontWeight: '600', marginBottom: spacing.sm },
   hint: { color: colors.onSurfaceTertiary, fontSize: typography.sm, marginTop: spacing.xs, marginBottom: spacing.sm },
@@ -387,8 +374,6 @@ const styles = StyleSheet.create({
   quoteDivider: { height: 1, backgroundColor: '#BFDBFE', marginVertical: spacing.sm },
   quoteTotalLabel: { color: colors.brandPrimary, fontSize: typography.lg, fontWeight: '800' },
   quoteTotalVal: { color: colors.brandPrimary, fontSize: typography.xl, fontWeight: '800' },
-  reboqueBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, backgroundColor: colors.brandPrimary, paddingVertical: spacing.lg, borderRadius: radius.md },
-  reboqueBtnText: { color: '#FFFFFF', fontSize: typography.lg, fontWeight: '700' },
   gpsBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, borderWidth: 1.5, borderColor: colors.brandPrimary, paddingVertical: spacing.lg, borderRadius: radius.md, backgroundColor: colors.surfaceSecondary, marginTop: spacing.sm },
   gpsBtnText: { color: colors.brandPrimary, fontSize: typography.lg, fontWeight: '700' },
   sectionLabel: { color: colors.brandPrimary, fontWeight: '700', fontSize: typography.sm, letterSpacing: 1, textTransform: 'uppercase', marginBottom: spacing.md, marginTop: spacing.xl },

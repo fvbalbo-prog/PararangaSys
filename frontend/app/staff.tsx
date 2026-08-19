@@ -3,7 +3,7 @@ import {
   View,
   Text,
   StyleSheet,
-  FlatList,
+  ScrollView,
   Pressable,
   ActivityIndicator,
   RefreshControl,
@@ -18,7 +18,6 @@ import { useAudioPlayer } from 'expo-audio';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { api } from '@/src/api';
 import type { MarinaRequest } from '@/src/api';
-import { StatusBadge } from '@/src/components/StatusBadge';
 
 const alertSound = require('@/assets/sounds/alert.wav');
 
@@ -72,50 +71,32 @@ export default function StaffScreen() {
     }, [load])
   );
 
-  const confirm = async (id: string) => {
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    const now = new Date().toISOString();
-    setItems((prev) => prev.map((r) => (r.id === id ? { ...r, status: 'concluida', returned_at: now } : r)));
-    try {
-      await api.completeRequest(id);
-    } catch {
-      load();
-    }
-  };
-
-  const reopen = async (id: string) => {
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-    setItems((prev) => prev.map((r) => (r.id === id ? { ...r, status: 'agendada', returned_at: null } : r)));
-    try {
-      await api.reopenRequest(id);
-    } catch {
-      load();
-    }
-  };
-
-  const cancel = async (id: string) => {
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-    setItems((prev) => prev.map((r) => (r.id === id ? { ...r, status: 'cancelada' } : r)));
-    try {
-      await api.cancelRequest(id);
-    } catch {
-      load();
-    }
-  };
-
   const logout = async () => {
     await AsyncStorage.removeItem('user');
     router.replace('/');
   };
 
-  const sorted = [...items].sort((a, b) => a.time.localeCompare(b.time));
+  const go = (path: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    router.push(path);
+  };
+
+  const pendingDescidas = items.filter((i) => i.type === 'descida' && i.status === 'agendada').length;
+  const pendingSubidas = items.filter((i) => i.type === 'subida' && i.status === 'agendada').length;
+
+  const MENU: { key: string; title: string; subtitle: string; icon: keyof typeof Ionicons.glyphMap; color: string; route: string; badge?: number }[] = [
+    { key: 'descida', title: 'Confirmar Descida', subtitle: 'Lanchas que entraram na água', icon: 'boat', color: colors.brandPrimary, route: '/staff-movimentacoes?filter=descida', badge: pendingDescidas },
+    { key: 'subida', title: 'Confirmar Subida', subtitle: 'Lanchas que voltaram ao seco', icon: 'arrow-up-circle', color: colors.success, route: '/staff-movimentacoes?filter=subida', badge: pendingSubidas },
+    { key: 'todas', title: 'Painel de Movimentações', subtitle: 'Todas as movimentações do dia', icon: 'list', color: '#0E7490', route: '/staff-movimentacoes?filter=all' },
+    { key: 'autorizados', title: 'Pessoas Autorizadas', subtitle: 'Consulta das autorizações de hoje', icon: 'shield-checkmark', color: '#4D7C0F', route: '/staff-autorizacoes' },
+  ];
 
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
       <View style={styles.header}>
         <View style={{ flex: 1 }}>
           <Text style={styles.kicker}>FUNCIONÁRIOS</Text>
-          <Text style={styles.title} testID="staff-title">Confirmar movimentações</Text>
+          <Text style={styles.title} testID="staff-title">Painel do funcionário</Text>
         </View>
         <Pressable onPress={logout} hitSlop={12} testID="staff-logout" style={styles.logoutBtn}>
           <Ionicons name="log-out-outline" size={22} color={colors.onBrandPrimary} />
@@ -123,81 +104,55 @@ export default function StaffScreen() {
       </View>
 
       <View style={styles.sheet}>
-        {openEmergencies > 0 ? (
-          <Pressable
-            testID="staff-emergency-banner"
-            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy); router.push('/admin-solicitacoes'); }}
-            style={({ pressed }) => [styles.emgBanner, pressed && { opacity: 0.9 }]}
-          >
-            <Ionicons name="alert-circle" size={24} color="#FFFFFF" />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.emgTitle}>
-                {openEmergencies === 1 ? '1 emergência aberta!' : `${openEmergencies} emergências abertas!`}
-              </Text>
-              <Text style={styles.emgSub}>Toque para atender agora</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color="#FFFFFF" />
-          </Pressable>
-        ) : null}
-        {loading ? (
-          <View style={styles.center}><ActivityIndicator color={colors.brandPrimary} /></View>
-        ) : sorted.length === 0 ? (
-          <View style={styles.center}>
-            <View style={styles.emptyIcon}><Ionicons name="boat-outline" size={44} color={colors.brandSecondary} /></View>
-            <Text style={styles.emptyTitle}>Nenhuma movimentação hoje</Text>
-          </View>
-        ) : (
-          <FlatList
-            data={sorted}
-            keyExtractor={(i) => i.id}
-            contentContainerStyle={styles.list}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={colors.brandPrimary} />}
-            renderItem={({ item }) => (
-              <View style={styles.card} testID={`staff-row-${item.id}`}>
-                <View style={styles.cardMain}>
-                  <View style={[styles.timeBlock, item.type === 'subida' && { backgroundColor: colors.brandSecondary }]}>
-                    <Text style={styles.timeText}>{item.time}</Text>
-                    <Text style={styles.timeLabel}>{item.type === 'descida' ? 'DESCIDA' : 'SUBIDA'}</Text>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.boat} numberOfLines={1}>{item.boat_name}</Text>
-                    <Text style={styles.meta} numberOfLines={1}>{item.user_name}</Text>
-                    <View style={{ marginTop: spacing.sm }}><StatusBadge status={item.status} /></View>
-                  </View>
+        <ScrollView
+          contentContainerStyle={styles.content}
+          showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={colors.brandPrimary} />}
+        >
+          {openEmergencies > 0 ? (
+            <Pressable
+              testID="staff-emergency-banner"
+              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy); router.push('/admin-solicitacoes'); }}
+              style={({ pressed }) => [styles.emgBanner, pressed && { opacity: 0.9 }]}
+            >
+              <Ionicons name="alert-circle" size={24} color="#FFFFFF" />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.emgTitle}>
+                  {openEmergencies === 1 ? '1 emergência aberta!' : `${openEmergencies} emergências abertas!`}
+                </Text>
+                <Text style={styles.emgSub}>Toque para atender agora</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color="#FFFFFF" />
+            </Pressable>
+          ) : null}
+
+          {loading ? (
+            <View style={styles.center}><ActivityIndicator color={colors.brandPrimary} /></View>
+          ) : (
+            MENU.map((m) => (
+              <Pressable
+                key={m.key}
+                testID={`staff-menu-${m.key}`}
+                onPress={() => go(m.route)}
+                style={({ pressed }) => [styles.menuCard, pressed && { opacity: 0.9 }]}
+              >
+                <View style={[styles.menuIcon, { backgroundColor: m.color }]}>
+                  <Ionicons name={m.icon} size={24} color="#FFFFFF" />
                 </View>
-                {item.status === 'agendada' ? (
-                  <Pressable
-                    testID={`staff-confirm-${item.id}`}
-                    style={({ pressed }) => [styles.confirmBtn, pressed && { opacity: 0.85 }]}
-                    onPress={() => confirm(item.id)}
-                  >
-                    <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
-                    <Text style={styles.confirmText}>Confirmar {item.type === 'descida' ? 'descida' : 'subida'}</Text>
-                  </Pressable>
-                ) : item.status === 'concluida' ? (
-                  <View style={styles.correctRow}>
-                    <Pressable
-                      testID={`staff-reopen-${item.id}`}
-                      style={({ pressed }) => [styles.correctBtn, { borderRightWidth: 1, borderRightColor: colors.border }, pressed && { opacity: 0.85 }]}
-                      onPress={() => reopen(item.id)}
-                    >
-                      <Ionicons name="arrow-undo-outline" size={16} color={colors.info} />
-                      <Text style={[styles.correctText, { color: colors.info }]}>Voltar p/ Aguardando</Text>
-                    </Pressable>
-                    <Pressable
-                      testID={`staff-cancel-${item.id}`}
-                      style={({ pressed }) => [styles.correctBtn, pressed && { opacity: 0.85 }]}
-                      onPress={() => cancel(item.id)}
-                    >
-                      <Ionicons name="close-circle-outline" size={16} color={colors.error} />
-                      <Text style={[styles.correctText, { color: colors.error }]}>Cancelar</Text>
-                    </Pressable>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.menuTitle}>{m.title}</Text>
+                  <Text style={styles.menuSub}>{m.subtitle}</Text>
+                </View>
+                {m.badge && m.badge > 0 ? (
+                  <View style={styles.countBadge}>
+                    <Text style={styles.countBadgeText}>{m.badge}</Text>
                   </View>
                 ) : null}
-              </View>
-            )}
-          />
-        )}
+                <Ionicons name="chevron-forward" size={20} color={colors.onSurfaceTertiary} />
+              </Pressable>
+            ))
+          )}
+        </ScrollView>
       </View>
     </SafeAreaView>
   );
@@ -210,23 +165,15 @@ const styles = StyleSheet.create({
   title: { color: colors.onBrandPrimary, fontSize: 24, fontWeight: '800', marginTop: 4 },
   logoutBtn: { padding: spacing.sm, borderRadius: radius.pill, backgroundColor: 'rgba(255,255,255,0.08)' },
   sheet: { flex: 1, backgroundColor: colors.surface, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingTop: spacing.lg },
-  emgBanner: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: colors.error, marginHorizontal: spacing.lg, marginBottom: spacing.md, padding: spacing.lg, borderRadius: radius.md },
+  content: { padding: spacing.lg, paddingBottom: spacing.xxxl, gap: spacing.md },
+  emgBanner: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: colors.error, padding: spacing.lg, borderRadius: radius.md, marginBottom: spacing.xs },
   emgTitle: { color: '#FFFFFF', fontSize: typography.lg, fontWeight: '800' },
   emgSub: { color: '#FFFFFF', opacity: 0.9, fontSize: typography.sm, marginTop: 2 },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl },
-  emptyIcon: { width: 88, height: 88, borderRadius: 44, backgroundColor: colors.brandTertiary, alignItems: 'center', justifyContent: 'center', marginBottom: spacing.lg },
-  emptyTitle: { color: colors.onSurface, fontSize: typography.xl, fontWeight: '700' },
-  list: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xxxl, gap: spacing.md },
-  card: { backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, overflow: 'hidden' },
-  cardMain: { flexDirection: 'row', gap: spacing.md, padding: spacing.md },
-  timeBlock: { backgroundColor: colors.brandPrimary, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radius.sm, alignItems: 'center', minWidth: 72, alignSelf: 'flex-start' },
-  timeText: { color: colors.onBrandPrimary, fontSize: typography.lg, fontWeight: '800' },
-  timeLabel: { color: '#FFFFFF', fontSize: 10, fontWeight: '700', letterSpacing: 1, opacity: 0.9 },
-  boat: { color: colors.onSurface, fontSize: typography.lg, fontWeight: '800' },
-  meta: { color: colors.onSurfaceSecondary, fontSize: typography.sm, marginTop: 2 },
-  confirmBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, backgroundColor: colors.success, paddingVertical: spacing.md },
-  confirmText: { color: '#FFFFFF', fontSize: typography.base, fontWeight: '700' },
-  correctRow: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: colors.border },
-  correctBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs, paddingVertical: spacing.md },
-  correctText: { fontSize: typography.sm, fontWeight: '700' },
+  center: { paddingVertical: spacing.xxxl, alignItems: 'center', justifyContent: 'center' },
+  menuCard: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.lg },
+  menuIcon: { width: 52, height: 52, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
+  menuTitle: { color: colors.onSurface, fontSize: typography.lg, fontWeight: '800' },
+  menuSub: { color: colors.onSurfaceSecondary, fontSize: typography.sm, marginTop: 2 },
+  countBadge: { backgroundColor: colors.error, borderRadius: radius.pill, minWidth: 24, height: 24, paddingHorizontal: 6, alignItems: 'center', justifyContent: 'center' },
+  countBadgeText: { color: '#FFFFFF', fontSize: typography.sm, fontWeight: '800' },
 });

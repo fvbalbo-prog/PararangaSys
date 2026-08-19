@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, Pressable, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, FlatList, Pressable, ActivityIndicator, RefreshControl, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -26,6 +26,7 @@ export default function AdminRelatorioScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
 
   const monthStr = `${year}-${String(month).padStart(2, '0')}`;
 
@@ -103,6 +104,9 @@ export default function AdminRelatorioScreen() {
       Alert.alert('Erro', 'Não foi possível gerar o PDF.');
     }
   };
+
+  const q = search.trim().toLowerCase();
+  const filteredClients = (report?.clients || []).filter((c) => !q || c.name.toLowerCase().includes(q));
 
   const renderClient = ({ item }: { item: ConsumoClient }) => {
     const open = expanded === item.cpf;
@@ -182,15 +186,34 @@ export default function AdminRelatorioScreen() {
           <Text style={styles.grandValue} testID="grand-total">{money(report?.grand_total || 0)}</Text>
         </View>
 
+        <View style={styles.searchWrap}>
+          <Ionicons name="search-outline" size={18} color={colors.onSurfaceTertiary} />
+          <TextInput
+            testID="relatorio-search-input"
+            style={styles.searchInput}
+            value={search}
+            onChangeText={setSearch}
+            placeholder="Buscar por cliente..."
+            placeholderTextColor={colors.onSurfaceTertiary}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          {search.length > 0 ? (
+            <Pressable onPress={() => setSearch('')} hitSlop={8} testID="relatorio-search-clear">
+              <Ionicons name="close-circle" size={18} color={colors.onSurfaceTertiary} />
+            </Pressable>
+          ) : null}
+        </View>
+
         {loading ? (
           <View style={styles.center}><ActivityIndicator color={colors.brandPrimary} /></View>
         ) : (
           <FlatList
-            data={report?.clients || []}
+            data={filteredClients}
             keyExtractor={(c) => c.cpf}
             contentContainerStyle={styles.list}
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={colors.brandPrimary} />}
-            ListEmptyComponent={<Text style={styles.empty}>Nenhum consumo neste mês.</Text>}
+            ListEmptyComponent={<Text style={styles.empty}>{q ? 'Nenhum cliente encontrado.' : 'Nenhum consumo neste mês.'}</Text>}
             renderItem={renderClient}
           />
         )}
@@ -212,6 +235,8 @@ const styles = StyleSheet.create({
   grandCard: { marginHorizontal: spacing.lg, marginBottom: spacing.md, backgroundColor: colors.brandPrimary, borderRadius: radius.md, padding: spacing.lg, alignItems: 'center' },
   grandLabel: { color: colors.brandSecondary, fontSize: typography.sm, fontWeight: '700', letterSpacing: 0.5 },
   grandValue: { color: colors.onBrandPrimary, fontSize: 28, fontWeight: '800', marginTop: 2 },
+  searchWrap: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginHorizontal: spacing.lg, marginBottom: spacing.md, paddingHorizontal: spacing.md, backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border },
+  searchInput: { flex: 1, paddingVertical: spacing.md, fontSize: typography.base, color: colors.onSurface },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   list: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xxxl, gap: spacing.sm },
   empty: { color: colors.onSurfaceSecondary, fontSize: typography.base, textAlign: 'center', marginTop: spacing.xxl },

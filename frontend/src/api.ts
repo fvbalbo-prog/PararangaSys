@@ -128,12 +128,13 @@ export const api = {
     boat_name?: string | null;
     items: { product_id: string; name: string; price: number; qty: number }[];
     observation?: string | null;
+    delivery_method?: 'balcao' | 'lancha';
   }) => req<ConvenienceOrder>('/convenience/orders', { method: 'POST', body: JSON.stringify(data) }),
   listOrders: (cpf?: string) => req<ConvenienceOrder[]>(`/convenience/orders${cpf ? `?cpf=${cpf}` : ''}`),
   setOrderStatus: (id: string, status: OrderStatus) =>
     req<ConvenienceOrder>(`/convenience/orders/${id}/status?status=${status}`, { method: 'PATCH' }),
   // Autorizações
-  createAuthorization: (data: { cpf: string; boat_name: string; person_name: string; date: string; can_lower?: boolean; service?: string | null }) =>
+  createAuthorization: (data: { cpf: string; boat_name: string; person_name: string; validity_type: 'data' | 'periodo' | 'recorrente'; date?: string | null; start_date?: string | null; end_date?: string | null; can_lower?: boolean; service?: string | null }) =>
     req<Authorization>('/authorizations', { method: 'POST', body: JSON.stringify(data) }),
   listAuthorizations: (cpf?: string) =>
     req<Authorization[]>(`/authorizations${cpf ? `?cpf=${cpf}` : ''}`),
@@ -141,6 +142,10 @@ export const api = {
     req<Authorization>(`/authorizations/${id}/cancel`, { method: 'PATCH' }),
   checkinAuthorization: (id: string) =>
     req<Authorization>(`/authorizations/${id}/checkin`, { method: 'PATCH' }),
+  // Avisos (notificações in-app)
+  listNotifications: (cpf: string) => req<AppNotification[]>(`/notifications?cpf=${cpf}`),
+  readNotification: (id: string) => req<{ ok: boolean }>(`/notifications/${id}/read`, { method: 'PATCH' }),
+  readAllNotifications: (cpf: string) => req<{ ok: boolean }>(`/notifications/read-all?cpf=${cpf}`, { method: 'POST' }),
   // Emergências
   createEmergency: (data: { cpf: string; boat_name?: string | null; location?: string | null; observation?: string | null }) =>
     req<Emergency>('/emergencies', { method: 'POST', body: JSON.stringify(data) }),
@@ -198,6 +203,7 @@ export type ConvenienceOrder = {
   items: { product_id: string; name: string; price: number; qty: number }[];
   total: number;
   observation?: string | null;
+  delivery_method?: 'balcao' | 'lancha';
   status: OrderStatus;
   created_at: string;
   updated_at: string;
@@ -208,13 +214,52 @@ export type Authorization = {
   user_name: string;
   boat_name: string;
   person_name: string;
-  date: string;
+  validity_type?: 'data' | 'periodo' | 'recorrente';
+  date?: string | null;
+  start_date?: string | null;
+  end_date?: string | null;
   can_lower?: boolean;
   service?: string | null;
   status: 'ativa' | 'cancelada';
   entered_at?: string | null;
   created_at: string;
 };
+
+export type AppNotification = {
+  id: string;
+  cpf: string;
+  title: string;
+  body: string;
+  kind: string;
+  read: boolean;
+  created_at: string;
+};
+
+/** An authorization is valid for a given day (YYYY-MM-DD) based on its validity type. */
+export function isAuthValidOn(a: Authorization, iso: string): boolean {
+  const vtype = a.validity_type || 'data';
+  if (vtype === 'recorrente') return true;
+  if (vtype === 'periodo') {
+    const start = a.start_date || a.date;
+    const end = a.end_date || a.date;
+    if (!start || !end) return false;
+    return iso >= start && iso <= end;
+  }
+  return a.date === iso;
+}
+
+/** Human label describing an authorization's validity. */
+export function authValidityLabel(a: Authorization): string {
+  const vtype = a.validity_type || 'data';
+  const br = (iso?: string | null) => {
+    if (!iso) return '';
+    const [y, m, d] = iso.split('-');
+    return `${d}/${m}/${y}`;
+  };
+  if (vtype === 'recorrente') return 'Sem validade (até cancelar)';
+  if (vtype === 'periodo') return `${br(a.start_date)} até ${br(a.end_date)}`;
+  return br(a.date);
+}
 export type Emergency = {
   id: string;
   kind?: 'socorro' | 'reboque';

@@ -1,0 +1,30 @@
+{
+  "summary": "Iteration 17 - Emergency screen restructure (formulário único, sem abas). Backend pytest test_marina_iteration17.py: 8/8 PASSED. Frontend (mobile 390x844): 5/5 flows PASSED on /emergencia. Verified: (1) old testIDs tab-socorro, tab-reboque, reboque-observation, reboque-submit, confirm-reboque, reboque-boat-select are ALL REMOVED. (2) New/kept testIDs emergencia-location, emergencia-observation, emergencia-button, reboque-nao, reboque-sim, reboque-location-button, emergencia-dialog are all present. (3) Empty submit -> AppDialog 'Localização obrigatória' shown, no POST. (4) Only location filled -> AppDialog 'Descrição obrigatória'. (5) Both filled + reboque=nao -> confirm dialog with confirm-socorro, tapping it POSTs /api/emergencies (kind=socorro), success dialog shown, and 'Meus acionamentos' section rendered with new card (confirmed by final screenshot). (6) reboque=sim without coords + Acionar -> dialog 'Localização do reboque' asking for GPS, does NOT show confirm-socorro. (7) reboque-location-button on web (permission denied by browser) -> AppDialog 'Permissão de localização' correctly displayed. Backend tests cover POST /api/emergencies (success + invalid CPF 404), GET /api/emergencies?cpf= (created socorro listed), GET /api/reboque/quote (with coords + missing params 400), POST /api/reboque (with client_lat/client_lng, correct estimated_total for 22-ft boat = base 1200 + additional_fee based on distance beyond 5 MN), and validation that missing coords/distance returns 400. No deprecated packages detected. No SafeAreaView issues.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_marina_iteration17.py",
+    "/app/test_reports/pytest/iteration17_results.xml"
+  ],
+  "action_items": [
+    "None blocking. Iteration 17 restructure is fully validated. Old tab-based UI (tab-socorro/tab-reboque and related testIDs) is completely removed. New unified form works end-to-end for both socorro and reboque flows including validation dialogs and GPS permission-denied fallback."
+  ],
+  "critical_code_review_comments": [
+    "emergencia.tsx:176-194 confirmSend correctly enforces required fields (location + observation) with AppDialog and blocks POST when reboque='sim' without coords/quote; matches spec exactly.",
+    "emergencia.tsx:135-174 dispatchSend branches to api.createReboque when reboque='sim' && coords present, else api.createEmergency (socorro). State reset after successful send is proper (location, observation, reboque, coords, quote all cleared).",
+    "emergencia.tsx:93-127 getLocation gracefully handles denied permission by opening AppDialog with 'Agora não' / 'Abrir Ajustes' buttons (Linking.openSettings). Try/catch also wraps getCurrentPositionAsync so GPS errors are surfaced via AppDialog too.",
+    "server.py:1086-1150 POST /emergencies and /reboque both persist doc without _id leak and return complete quote inlined for reboque. GET /emergencies?cpf= returns them sorted desc — verified in tests.",
+    "server.py:1041-1076 reboque_quote logic uses REBOQUE_TABLE and clamps additional_nm >= 0 (correct: distances < 5 MN yield additional_fee=0). Length fallback to 999-tier when unknown."
+  ],
+  "updated_files": ["/app/backend/tests/test_marina_iteration17.py (new)"],
+  "success_rate": {"backend": "100% (8/8)", "frontend": "100% (5/5 flows on 390x844)"},
+  "seed_data_creation": "Test run created 2 socorro records + 1 reboque record for João (11111111111) with TEST_iter17 markers. Non-destructive; historical.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Emergency screen is now a single form (no tabs). Kept testIDs: emergencia-screen, emergencia-location, emergencia-observation, emergencia-button (footer 'ACIONAR EMERGÊNCIA'), reboque-nao/reboque-sim (segmented control), reboque-location-button, reboque-quote/reboque-total (visible only after GPS success), emergencia-dialog, confirm-socorro (destructive button inside confirmation dialog). Removed: tab-socorro, tab-reboque, reboque-observation, reboque-submit, confirm-reboque, reboque-boat-select. GPS on web preview will be denied by browser → AppDialog with 'Permissão de localização' + 'Agora não'/'Abrir Ajustes' fires. Both empty-field validation and reboque-without-coords validation use showInfo (AppDialog with OK). Backend endpoints unchanged: POST /api/emergencies, POST /api/reboque (requires client_lat/client_lng or distance_nm), GET /api/emergencies?cpf=."
+}
