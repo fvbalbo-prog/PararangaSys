@@ -1,0 +1,37 @@
+{
+  "summary": "Iteration 20 features fully validated. Backend: 9/9 pytest passing (order status flow pendente→em_preparo→pronto→entregue, cancel, invalid rejected, not-found, weekly report shape with 7 items, quiosque exit-pin via /api/login). Frontend: All flows PASS. (1) Admin mobile shows only 'Painel' as admin-title; legacy 'Movimentação do dia' and 'PAINEL DA MARINA' NOT present. (2) Staff hub shows staff-balcao-banner when active lancha orders exist; staff-menu-balcao card opens /staff-balcao. (3) staff-balcao: prepare→ready→deliver transitions verified by real clicks (a23ddecb… order advanced through em_preparo and pronto). Retirada no balcão and Entrega na lancha both listed with badges. (4) Client /conveniencia: all 4 status labels (Recebido, Em preparo, Pronto, Entregue) render in list; 20 order-receipt-{id} buttons found; tapping receipt does not crash the screen (web Print.printToFileAsync gracefully handled). (5) Admin /admin-solicitacoes Conveniência tab shows order-prepare, order-ready, order-deliver, order-cancel buttons + 'Em preparo'/'Pronto' chips. (6) Desktop 1280x860: auto-redirect to /admin-desktop, desktop-weekly panel with exactly 7 weekly-{YYYY-MM-DD} columns present. (7) /admin-status: 'AO VIVO' indicator present; tapping lock (back-button) opens exit-pin modal; wrong pin (9999) shows status-exit-error='Senha incorreta.' and stays on screen; cancel closes modal; correct pin (0000) validates via api.login and navigates back to /admin.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_marina_iteration20.py",
+    "/app/test_reports/pytest/iteration20_results.xml",
+    "/app/test_reports/desktop_weekly.png",
+    "/app/test_reports/admin_solic_conv.png"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "shareReceipt() in conveniencia.tsx handles web fallback: if Sharing.isAvailableAsync is false it falls back to Print.printAsync; exceptions are caught and surfaced via dialog. Safe.",
+    "PATCH /convenience/orders/{oid}/status uses whitelist ('pendente','em_preparo','pronto','entregue','cancelada') and returns 400 for invalid, 404 for missing. Good.",
+    "/api/reports/weekly returns exactly 7 items with correct date/label/movements/revenue shape and excludes 'cancelada' orders/requests when tallying.",
+    "admin-status quiosque exit modal correctly re-uses api.login(cpf5=00000, pin=4 digits) to validate; response is_admin gate ensures only admin pin unlocks. status-exit-error triggers only on failed verification.",
+    "admin.tsx header renders single title testID='admin-title' with 'Painel'; legacy copy removed successfully.",
+    "staff-balcao.tsx auto-refreshes every ~12s and highlights lancha orders via cardLancha style; button set adapts to status (prepare→ready→deliver / cancel always visible while active)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_marina_iteration20.py (new)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "seed_data_creation": "Created ~6 TEST_ convenience orders during backend suite (statuses: em_preparo, pronto, entregue, cancelada) + 2 orders (TEST_label_prep, TEST_label_pronto) via curl to exercise UI status labels.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Test env timezone: server returns weekly dates 2026-08-13..2026-08-19 (UTC). Client login uses cpf-input + phone-input + login-submit-button (NOT login-button). To transition orders quickly use PATCH /api/convenience/orders/{id}/status?status=... . For desktop tests remember adminLayoutMode is persisted; always localStorage.clear() and reload between mobile/desktop scenarios.",
+  "rca_of_issue": "No bugs found."
+}

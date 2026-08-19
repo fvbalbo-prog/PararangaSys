@@ -16,6 +16,8 @@ import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { api, boatName, fileUrl, PRODUCT_CATEGORIES } from '@/src/api';
 import type { User, Product, ConvenienceOrder } from '@/src/api';
@@ -31,12 +33,16 @@ function todayISO() {
 }
 
 const STATUS_LABEL: Record<string, string> = {
-  pendente: 'Pendente',
+  pendente: 'Recebido',
+  em_preparo: 'Em preparo',
+  pronto: 'Pronto',
   entregue: 'Entregue',
   cancelada: 'Cancelada',
 };
 const STATUS_COLOR: Record<string, string> = {
   pendente: colors.warning,
+  em_preparo: '#B45309',
+  pronto: '#0E7490',
   entregue: colors.success,
   cancelada: colors.error,
 };
@@ -53,8 +59,45 @@ export default function ConvenienciaScreen() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [catFilter, setCatFilter] = useState<string>('all');
+  const [sharingId, setSharingId] = useState<string | null>(null);
   const [dialog, setDialog] = useState<{ title: string; message?: string; buttons: DialogButton[] } | null>(null);
   const closeDialog = () => setDialog(null);
+
+  const shareReceipt = async (o: ConvenienceOrder) => {
+    try {
+      setSharingId(o.id);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      const when = new Date(o.created_at).toLocaleString('pt-BR');
+      const rows = o.items
+        .map((i) => `<tr><td>${i.qty}x ${i.name}</td><td class="r">${money(i.price * i.qty)}</td></tr>`)
+        .join('');
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><style>
+        *{font-family:-apple-system,Helvetica,Arial,sans-serif;} body{padding:28px;color:#0B2545;}
+        h1{font-size:20px;margin:0;} h2{font-size:13px;font-weight:500;color:#475569;margin:4px 0 16px;}
+        table{width:100%;border-collapse:collapse;margin-top:8px;} td{padding:8px 0;border-bottom:1px solid #E2E8F0;font-size:14px;}
+        td.r{text-align:right;} .tot{font-size:18px;font-weight:800;margin-top:14px;text-align:right;}
+        .tag{display:inline-block;background:#E8F0FE;color:#0B2545;padding:6px 10px;border-radius:6px;font-size:13px;font-weight:700;margin-top:6px;}
+        .foot{margin-top:18px;font-size:11px;color:#94A3B8;}</style></head><body>
+        <h1>Marina Pararanga — Comprovante de Pedido</h1>
+        <h2>${when}${o.boat_name ? ' • ' + o.boat_name : ''}</h2>
+        <div class="tag">${o.delivery_method === 'lancha' ? '🚤 Entrega na lancha' : '🏪 Retirada no balcão'}</div>
+        <table>${rows}</table>
+        <p class="tot">Total: ${money(o.total)}</p>
+        ${o.observation ? `<p>Obs.: ${o.observation}</p>` : ''}
+        <p class="foot">Status: ${STATUS_LABEL[o.status] || o.status}. Documento gerado pelo app da marina.</p>
+        </body></html>`;
+      const { uri } = await Print.printToFileAsync({ html });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Comprovante do pedido' });
+      } else {
+        await Print.printAsync({ uri });
+      }
+    } catch {
+      setDialog({ title: 'Erro', message: 'Não foi possível gerar o comprovante.', buttons: [{ label: 'OK', variant: 'primary', onPress: closeDialog }] });
+    } finally {
+      setSharingId(null);
+    }
+  };
 
   const loadOrders = useCallback(async (cpf: string) => {
     try {
@@ -298,6 +341,21 @@ export default function ConvenienciaScreen() {
                         <Text style={styles.orderDeliveryText}>{o.delivery_method === 'lancha' ? 'Entrega na lancha' : 'Retirada no balcão'}</Text>
                       </View>
                       {o.observation ? <Text style={styles.orderObs}>Obs.: {o.observation}</Text> : null}
+                      <Pressable
+                        testID={`order-receipt-${o.id}`}
+                        onPress={() => shareReceipt(o)}
+                        disabled={sharingId === o.id}
+                        style={({ pressed }) => [styles.receiptBtn, pressed && { opacity: 0.85 }]}
+                      >
+                        {sharingId === o.id ? (
+                          <ActivityIndicator size="small" color={colors.brandPrimary} />
+                        ) : (
+                          <>
+                            <Ionicons name="share-outline" size={16} color={colors.brandPrimary} />
+                            <Text style={styles.receiptText}>Ver / reenviar comprovante</Text>
+                          </>
+                        )}
+                      </Pressable>
                     </View>
                   ))}
                 </>
@@ -371,6 +429,8 @@ const styles = StyleSheet.create({
   orderObs: { color: colors.onSurfaceTertiary, fontSize: typography.sm, marginTop: 2 },
   orderDelivery: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
   orderDeliveryText: { color: colors.brandPrimary, fontSize: typography.sm, fontWeight: '700' },
+  receiptBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs, marginTop: spacing.md, paddingVertical: spacing.sm, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border },
+  receiptText: { color: colors.brandPrimary, fontSize: typography.sm, fontWeight: '700' },
   deliveryRow: { flexDirection: 'row', gap: spacing.md },
   deliveryBtn: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.xs, paddingVertical: spacing.lg, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceSecondary },
   deliveryBtnActive: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },

@@ -8,7 +8,7 @@ import * as Haptics from 'expo-haptics';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { formatMoney as money } from '@/src/format';
 import { api } from '@/src/api';
-import type { MarinaRequest, ConvenienceOrder, Emergency } from '@/src/api';
+import type { MarinaRequest, ConvenienceOrder, Emergency, WeeklyDay } from '@/src/api';
 import { StatusBadge } from '@/src/components/StatusBadge';
 import { useAdminLayout } from '@/src/hooks/useAdminLayout';
 
@@ -32,6 +32,7 @@ export default function AdminDesktopScreen() {
   const [items, setItems] = useState<MarinaRequest[]>([]);
   const [orders, setOrders] = useState<ConvenienceOrder[]>([]);
   const [emergencies, setEmergencies] = useState<Emergency[]>([]);
+  const [weekly, setWeekly] = useState<WeeklyDay[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -51,6 +52,7 @@ export default function AdminDesktopScreen() {
       setItems(reqs);
       setOrders(ords);
       setEmergencies(emgs);
+      api.weeklyReport().then(setWeekly).catch(() => {});
     } catch {
       setItems([]);
     } finally {
@@ -231,6 +233,38 @@ export default function AdminDesktopScreen() {
                   </View>
                 </View>
               </View>
+
+              {/* Resumo semanal */}
+              <View style={[styles.panel, { marginTop: spacing.lg }]} testID="desktop-weekly">
+                <View style={styles.panelHead}>
+                  <Text style={styles.panelTitle}>Resumo dos últimos 7 dias</Text>
+                </View>
+                {(() => {
+                  const maxMov = Math.max(1, ...weekly.map((w) => w.movements));
+                  const maxRev = Math.max(1, ...weekly.map((w) => w.revenue));
+                  return (
+                    <>
+                      <View style={styles.chartLegend}>
+                        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: colors.brandPrimary }]} /><Text style={styles.legendText}>Movimentações</Text></View>
+                        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: colors.success }]} /><Text style={styles.legendText}>Faturamento</Text></View>
+                      </View>
+                      <View style={styles.chartRow}>
+                        {weekly.map((w) => (
+                          <View key={w.date} style={styles.chartCol} testID={`weekly-${w.date}`}>
+                            <Text style={styles.chartValTop}>{w.movements}</Text>
+                            <View style={styles.barsWrap}>
+                              <View style={[styles.bar, { height: Math.max(4, (w.movements / maxMov) * 120), backgroundColor: colors.brandPrimary }]} />
+                              <View style={[styles.bar, { height: Math.max(4, (w.revenue / maxRev) * 120), backgroundColor: colors.success }]} />
+                            </View>
+                            <Text style={styles.chartDay}>{w.label}</Text>
+                            <Text style={styles.chartRev}>{money(w.revenue)}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    </>
+                  );
+                })()}
+              </View>
             </>
           )}
         </ScrollView>
@@ -292,4 +326,15 @@ const styles = StyleSheet.create({
   emgRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: spacing.md, borderTopWidth: 1, borderTopColor: colors.border },
   emgName: { color: colors.onSurface, fontSize: typography.base, fontWeight: '800' },
   emgMeta: { color: colors.onSurfaceSecondary, fontSize: typography.sm, marginTop: 2 },
+  chartLegend: { flexDirection: 'row', gap: spacing.lg, marginBottom: spacing.md },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  legendDot: { width: 12, height: 12, borderRadius: 3 },
+  legendText: { color: colors.onSurfaceSecondary, fontSize: typography.sm, fontWeight: '600' },
+  chartRow: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: spacing.sm },
+  chartCol: { flex: 1, alignItems: 'center', gap: 4 },
+  chartValTop: { color: colors.onSurfaceSecondary, fontSize: typography.sm, fontWeight: '700' },
+  barsWrap: { flexDirection: 'row', alignItems: 'flex-end', gap: 4, height: 128 },
+  bar: { width: 14, borderTopLeftRadius: 3, borderTopRightRadius: 3 },
+  chartDay: { color: colors.onSurface, fontSize: typography.sm, fontWeight: '700', marginTop: 4 },
+  chartRev: { color: colors.onSurfaceTertiary, fontSize: 11 },
 });

@@ -17,9 +17,17 @@ import * as Haptics from 'expo-haptics';
 import { useAudioPlayer } from 'expo-audio';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { api } from '@/src/api';
-import type { MarinaRequest } from '@/src/api';
+import type { MarinaRequest, ConvenienceOrder } from '@/src/api';
 
 const alertSound = require('@/assets/sounds/alert.wav');
+
+function todayISO() {
+  const d = new Date();
+  const p = (n: number) => n.toString().padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+const ACTIVE_ORDER = (o: ConvenienceOrder) =>
+  (o.created_at || '').startsWith(todayISO()) && o.status !== 'entregue' && o.status !== 'cancelada';
 
 export default function StaffScreen() {
   const router = useRouter();
@@ -27,10 +35,13 @@ export default function StaffScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [openEmergencies, setOpenEmergencies] = useState(0);
+  const [balcaoCount, setBalcaoCount] = useState(0);
+  const [lanchaPending, setLanchaPending] = useState(0);
   const prevEmgRef = useRef<number | null>(null);
+  const prevLanchaRef = useRef<number | null>(null);
   const player = useAudioPlayer(alertSound);
 
-  const alertNewEmergency = useCallback(() => {
+  const playAlert = useCallback(() => {
     try {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       Vibration.vibrate([0, 400, 200, 400, 200, 400]);
@@ -43,24 +54,30 @@ export default function StaffScreen() {
     try {
       const raw = await AsyncStorage.getItem('user');
       if (!raw) return router.replace('/');
-      const [data, emgs] = await Promise.all([
+      const [data, emgs, orders] = await Promise.all([
         api.dayRequests(),
         api.listEmergencies(undefined, 'aberta').catch(() => []),
+        api.listOrders().catch(() => [] as ConvenienceOrder[]),
       ]);
       setItems(data);
       const count = emgs.length;
       setOpenEmergencies(count);
-      if (prevEmgRef.current !== null && count > prevEmgRef.current) {
-        alertNewEmergency();
-      }
+      if (prevEmgRef.current !== null && count > prevEmgRef.current) playAlert();
       prevEmgRef.current = count;
+
+      const active = orders.filter(ACTIVE_ORDER);
+      setBalcaoCount(active.length);
+      const lancha = active.filter((o) => o.delivery_method === 'lancha').length;
+      setLanchaPending(lancha);
+      if (prevLanchaRef.current !== null && lancha > prevLanchaRef.current) playAlert();
+      prevLanchaRef.current = lancha;
     } catch {
       setItems([]);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [router, alertNewEmergency]);
+  }, [router, playAlert]);
 
   useFocusEffect(
     useCallback(() => {
@@ -88,6 +105,7 @@ export default function StaffScreen() {
     { key: 'descida', title: 'Confirmar Descida', subtitle: 'Lanchas que entraram na água', icon: 'boat', color: colors.brandPrimary, route: '/staff-movimentacoes?filter=descida', badge: pendingDescidas },
     { key: 'subida', title: 'Confirmar Subida', subtitle: 'Lanchas que voltaram ao seco', icon: 'arrow-up-circle', color: colors.success, route: '/staff-movimentacoes?filter=subida', badge: pendingSubidas },
     { key: 'todas', title: 'Painel de Movimentações', subtitle: 'Todas as movimentações do dia', icon: 'list', color: '#0E7490', route: '/staff-movimentacoes?filter=all' },
+    { key: 'balcao', title: 'Balcão de Pedidos', subtitle: 'Conveniência: preparar e entregar', icon: 'cart', color: '#7C3AED', route: '/staff-balcao', badge: balcaoCount },
     { key: 'autorizados', title: 'Pessoas Autorizadas', subtitle: 'Consulta das autorizações de hoje', icon: 'shield-checkmark', color: '#4D7C0F', route: '/staff-autorizacoes' },
   ];
 
@@ -121,6 +139,23 @@ export default function StaffScreen() {
                   {openEmergencies === 1 ? '1 emergência aberta!' : `${openEmergencies} emergências abertas!`}
                 </Text>
                 <Text style={styles.emgSub}>Toque para atender agora</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color="#FFFFFF" />
+            </Pressable>
+          ) : null}
+
+          {lanchaPending > 0 ? (
+            <Pressable
+              testID="staff-balcao-banner"
+              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); router.push('/staff-balcao'); }}
+              style={({ pressed }) => [styles.balcaoBanner, pressed && { opacity: 0.9 }]}
+            >
+              <Ionicons name="boat" size={22} color="#FFFFFF" />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.emgTitle}>
+                  {lanchaPending === 1 ? '1 entrega na lancha aguardando' : `${lanchaPending} entregas na lancha aguardando`}
+                </Text>
+                <Text style={styles.emgSub}>Toque para preparar e agilizar a saída</Text>
               </View>
               <Ionicons name="chevron-forward" size={20} color="#FFFFFF" />
             </Pressable>
@@ -167,6 +202,7 @@ const styles = StyleSheet.create({
   sheet: { flex: 1, backgroundColor: colors.surface, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingTop: spacing.lg },
   content: { padding: spacing.lg, paddingBottom: spacing.xxxl, gap: spacing.md },
   emgBanner: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: colors.error, padding: spacing.lg, borderRadius: radius.md, marginBottom: spacing.xs },
+  balcaoBanner: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: '#7C3AED', padding: spacing.lg, borderRadius: radius.md, marginBottom: spacing.xs },
   emgTitle: { color: '#FFFFFF', fontSize: typography.lg, fontWeight: '800' },
   emgSub: { color: '#FFFFFF', opacity: 0.9, fontSize: typography.sm, marginTop: 2 },
   center: { paddingVertical: spacing.xxxl, alignItems: 'center', justifyContent: 'center' },

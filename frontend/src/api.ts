@@ -133,6 +133,7 @@ export const api = {
   listOrders: (cpf?: string) => req<ConvenienceOrder[]>(`/convenience/orders${cpf ? `?cpf=${cpf}` : ''}`),
   setOrderStatus: (id: string, status: OrderStatus) =>
     req<ConvenienceOrder>(`/convenience/orders/${id}/status?status=${status}`, { method: 'PATCH' }),
+  weeklyReport: () => req<WeeklyDay[]>('/reports/weekly'),
   // Autorizações
   createAuthorization: (data: { cpf: string; boat_name: string; person_name: string; validity_type: 'data' | 'periodo' | 'recorrente'; date?: string | null; start_date?: string | null; end_date?: string | null; can_lower?: boolean; service?: string | null }) =>
     req<Authorization>('/authorizations', { method: 'POST', body: JSON.stringify(data) }),
@@ -194,7 +195,14 @@ export function fileUrl(path?: string | null): string | undefined {
   // stored as "/api/files/..."; BASE already includes host without /api
   return `${BASE}${path}`;
 }
-export type OrderStatus = 'pendente' | 'entregue' | 'cancelada';
+export type OrderStatus = 'pendente' | 'em_preparo' | 'pronto' | 'entregue' | 'cancelada';
+
+export type WeeklyDay = {
+  date: string;
+  label: string;
+  movements: number;
+  revenue: number;
+};
 export type ConvenienceOrder = {
   id: string;
   cpf: string;

@@ -894,7 +894,7 @@ async def list_orders(cpf: Optional[str] = None):
 
 @api_router.patch("/convenience/orders/{oid}/status")
 async def set_order_status(oid: str, status: str):
-    if status not in ("pendente", "entregue", "cancelada"):
+    if status not in ("pendente", "em_preparo", "pronto", "entregue", "cancelada"):
         raise HTTPException(status_code=400, detail="Status inválido.")
     res = await db.convenience_orders.update_one(
         {"id": oid}, {"$set": {"status": status, "updated_at": datetime.now(timezone.utc).isoformat()}}
@@ -902,6 +902,32 @@ async def set_order_status(oid: str, status: str):
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Pedido não encontrado.")
     return await db.convenience_orders.find_one({"id": oid}, {"_id": 0})
+
+
+@api_router.get("/reports/weekly")
+async def weekly_report():
+    """Últimos 7 dias: contagem de movimentações e faturamento (conveniência + reboque) por dia."""
+    today = datetime.now(timezone.utc).date()
+    days = [(today - timedelta(days=i)) for i in range(6, -1, -1)]
+    day_iso = [d.isoformat() for d in days]
+
+    requests = await db.requests.find({"status": {"$ne": "cancelada"}}, {"_id": 0, "date": 1}).to_list(5000)
+    orders = await db.convenience_orders.find({"status": {"$ne": "cancelada"}}, {"_id": 0, "created_at": 1, "total": 1}).to_list(5000)
+    emgs = await db.emergencies.find({"kind": "reboque", "billed_amount": {"$ne": None}}, {"_id": 0, "billed_at": 1, "billed_amount": 1}).to_list(5000)
+
+    result = []
+    for iso in day_iso:
+        movements = sum(1 for r in requests if (r.get("date") or "") == iso)
+        conv = sum(o.get("total", 0) for o in orders if (o.get("created_at") or "").startswith(iso))
+        reb = sum(e.get("billed_amount", 0) or 0 for e in emgs if (e.get("billed_at") or "").startswith(iso))
+        d = datetime.fromisoformat(iso).date()
+        result.append({
+            "date": iso,
+            "label": ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"][d.weekday()],
+            "movements": movements,
+            "revenue": round(conv + reb, 2),
+        })
+    return result
 
 
 # ===================== Autorizar Entrada (autorizar terceiros) =====================

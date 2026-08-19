@@ -18,7 +18,7 @@ import * as Haptics from 'expo-haptics';
 import { useAudioPlayer } from 'expo-audio';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { api, isAuthValidOn, authValidityLabel } from '@/src/api';
-import type { ConvenienceOrder, Authorization, Emergency } from '@/src/api';
+import type { ConvenienceOrder, Authorization, Emergency, OrderStatus } from '@/src/api';
 
 const alertSound = require('@/assets/sounds/alert.wav');
 
@@ -103,7 +103,7 @@ export default function AdminSolicitacoesScreen() {
     .filter((o) => o.status !== 'cancelada' && new Date(o.created_at) >= weekAgo)
     .reduce((s, o) => s + o.total, 0);
 
-  const setOrderStatus = async (id: string, status: 'entregue' | 'cancelada') => {
+  const setOrderStatus = async (id: string, status: OrderStatus) => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status } : o)));
     try { await api.setOrderStatus(id, status); } catch { load(); }
@@ -209,14 +209,33 @@ export default function AdminSolicitacoesScreen() {
                   <Ionicons name={item.delivery_method === 'lancha' ? 'boat-outline' : 'storefront-outline'} size={13} color={colors.brandPrimary} />
                   <Text style={styles.deliveryTagText}>{item.delivery_method === 'lancha' ? 'Entrega na lancha' : 'Retirada no balcão'}</Text>
                 </View>
+                {item.status === 'em_preparo' || item.status === 'pronto' ? (
+                  <View style={[styles.statusChip, { backgroundColor: item.status === 'pronto' ? '#0E7490' : '#B45309' }]}>
+                    <Text style={styles.statusChipText}>{item.status === 'pronto' ? 'Pronto' : 'Em preparo'}</Text>
+                  </View>
+                ) : null}
                 {item.observation ? <Text style={styles.cardMeta}>Obs.: {item.observation}</Text> : null}
                 <Text style={styles.cardTime}>{fmt(item.created_at)}</Text>
-                {item.status === 'pendente' ? (
+                {item.status !== 'entregue' && item.status !== 'cancelada' ? (
                   <View style={styles.actions}>
-                    <Pressable testID={`order-deliver-${item.id}`} onPress={() => setOrderStatus(item.id, 'entregue')} style={[styles.actionBtn, { borderRightWidth: 1, borderRightColor: colors.border }]}>
-                      <Ionicons name="checkmark-circle-outline" size={16} color={colors.success} />
-                      <Text style={[styles.actionText, { color: colors.success }]}>Entregar</Text>
-                    </Pressable>
+                    {item.status === 'pendente' ? (
+                      <Pressable testID={`order-prepare-${item.id}`} onPress={() => setOrderStatus(item.id, 'em_preparo')} style={[styles.actionBtn, { borderRightWidth: 1, borderRightColor: colors.border }]}>
+                        <Ionicons name="flame-outline" size={16} color="#B45309" />
+                        <Text style={[styles.actionText, { color: '#B45309' }]}>Preparar</Text>
+                      </Pressable>
+                    ) : null}
+                    {item.status === 'em_preparo' ? (
+                      <Pressable testID={`order-ready-${item.id}`} onPress={() => setOrderStatus(item.id, 'pronto')} style={[styles.actionBtn, { borderRightWidth: 1, borderRightColor: colors.border }]}>
+                        <Ionicons name="checkmark-done-outline" size={16} color="#0E7490" />
+                        <Text style={[styles.actionText, { color: '#0E7490' }]}>Pronto</Text>
+                      </Pressable>
+                    ) : null}
+                    {item.status === 'pronto' ? (
+                      <Pressable testID={`order-deliver-${item.id}`} onPress={() => setOrderStatus(item.id, 'entregue')} style={[styles.actionBtn, { borderRightWidth: 1, borderRightColor: colors.border }]}>
+                        <Ionicons name="bag-check-outline" size={16} color={colors.success} />
+                        <Text style={[styles.actionText, { color: colors.success }]}>Entregar</Text>
+                      </Pressable>
+                    ) : null}
                     <Pressable testID={`order-cancel-${item.id}`} onPress={() => setOrderStatus(item.id, 'cancelada')} style={styles.actionBtn}>
                       <Ionicons name="close-circle-outline" size={16} color={colors.error} />
                       <Text style={[styles.actionText, { color: colors.error }]}>Cancelar</Text>
@@ -395,6 +414,8 @@ const styles = StyleSheet.create({
   cardMeta: { color: colors.onSurfaceSecondary, fontSize: typography.base, marginTop: 2 },
   deliveryTag: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6, alignSelf: 'flex-start', backgroundColor: colors.brandTertiary, paddingHorizontal: spacing.sm, paddingVertical: 3, borderRadius: radius.pill },
   deliveryTagText: { color: colors.brandPrimary, fontSize: typography.sm, fontWeight: '700' },
+  statusChip: { alignSelf: 'flex-start', borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: 3, marginTop: 6 },
+  statusChipText: { color: '#FFFFFF', fontSize: typography.sm, fontWeight: '700' },
   cardTime: { color: colors.onSurfaceTertiary, fontSize: typography.sm, marginTop: 4 },
   actions: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: colors.border, marginTop: spacing.md },
   actionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs, paddingVertical: spacing.md },

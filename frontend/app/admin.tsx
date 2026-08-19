@@ -258,8 +258,7 @@ export default function AdminScreen() {
     <SafeAreaView style={styles.root} edges={['top']}>
       <View style={styles.header}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.kicker}>PAINEL DA MARINA</Text>
-          <Text style={styles.title} testID="admin-title">Movimentação do dia</Text>
+          <Text style={styles.title} testID="admin-title">Painel</Text>
         </View>
         <Pressable
           onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-dashboard'); }}

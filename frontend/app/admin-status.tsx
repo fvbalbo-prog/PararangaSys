@@ -1,8 +1,9 @@
-import { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, RefreshControl } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, RefreshControl, Modal, TextInput, BackHandler } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { spacing, radius, typography } from '@/src/theme';
 import { api } from '@/src/api';
 import type { MarinaRequest } from '@/src/api';
@@ -80,6 +81,46 @@ export default function AdminStatusScreen() {
   const [openCount, setOpenCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [gate, setGate] = useState(false);
+  const [pin, setPin] = useState('');
+  const [pinError, setPinError] = useState<string | null>(null);
+  const [verifying, setVerifying] = useState(false);
+  const [adminCpf, setAdminCpf] = useState('00000');
+
+  useEffect(() => {
+    AsyncStorage.getItem('user').then((raw) => {
+      if (raw) {
+        try {
+          const u = JSON.parse(raw);
+          if (u?.cpf) setAdminCpf(String(u.cpf).replace(/\D/g, '').slice(0, 5));
+        } catch {}
+      }
+    });
+  }, []);
+
+  const requestExit = useCallback(() => {
+    setPin('');
+    setPinError(null);
+    setGate(true);
+    return true;
+  }, []);
+
+  const confirmExit = async () => {
+    const code = pin.replace(/\D/g, '');
+    if (code.length < 4) { setPinError('Digite a senha (4 dígitos) do admin.'); return; }
+    try {
+      setVerifying(true);
+      setPinError(null);
+      const u = await api.login(adminCpf, code.slice(-4));
+      if (!u.is_admin) { setPinError('Senha inválida.'); return; }
+      setGate(false);
+      router.back();
+    } catch {
+      setPinError('Senha incorreta.');
+    } finally {
+      setVerifying(false);
+    }
+  };
 
   const load = useCallback(async () => {
     try {
@@ -102,9 +143,10 @@ export default function AdminStatusScreen() {
     useCallback(() => {
       setLoading(true);
       load();
-      const interval = setInterval(load, 15000);
-      return () => clearInterval(interval);
-    }, [load])
+      const interval = setInterval(load, 10000);
+      const sub = BackHandler.addEventListener('hardwareBackPress', requestExit);
+      return () => { clearInterval(interval); sub.remove(); };
+    }, [load, requestExit])
   );
 
   const byTime = (a: MarinaRequest, b: MarinaRequest) => a.time.localeCompare(b.time);
@@ -114,12 +156,16 @@ export default function AdminStatusScreen() {
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={16} testID="back-button">
-          <Ionicons name="chevron-back" size={26} color={D.text} />
+        <Pressable onPress={requestExit} hitSlop={16} testID="back-button">
+          <Ionicons name="lock-closed" size={24} color={D.text} />
         </Pressable>
         <View style={{ flex: 1 }}>
           <Text style={styles.title} testID="status-title">Status das Lanchas</Text>
-          <Text style={styles.subtitle}>Somente leitura • hoje</Text>
+          <Text style={styles.subtitle}>Movimentações ao vivo • hoje</Text>
+        </View>
+        <View style={styles.liveTag}>
+          <View style={styles.liveDot} />
+          <Text style={styles.liveText}>AO VIVO</Text>
         </View>
       </View>
 
@@ -142,6 +188,38 @@ export default function AdminStatusScreen() {
           <Section title="Subidas solicitadas" icon="arrow-up-circle-outline" data={subidas} emergencyBoats={emergencyBoats} />
         </ScrollView>
       )}
+
+      <Modal visible={gate} transparent animationType="fade" onRequestClose={() => setGate(false)}>
+        <View style={styles.gateRoot}>
+          <View style={styles.gateCard}>
+            <View style={styles.gateIcon}><Ionicons name="lock-closed" size={26} color={D.accent} /></View>
+            <Text style={styles.gateTitle}>Sair do modo painel</Text>
+            <Text style={styles.gateSub}>Digite a senha do administrador para sair desta tela.</Text>
+            <TextInput
+              testID="status-exit-pin"
+              style={styles.gateInput}
+              value={pin}
+              onChangeText={setPin}
+              placeholder="Senha do admin"
+              placeholderTextColor={D.sub}
+              keyboardType="number-pad"
+              inputMode="numeric"
+              secureTextEntry
+              maxLength={4}
+              autoFocus
+            />
+            {pinError ? <Text style={styles.gateError} testID="status-exit-error">{pinError}</Text> : null}
+            <View style={styles.gateActions}>
+              <Pressable style={[styles.gateBtn, styles.gateCancel]} onPress={() => setGate(false)} testID="status-exit-cancel">
+                <Text style={styles.gateCancelText}>Continuar no painel</Text>
+              </Pressable>
+              <Pressable style={[styles.gateBtn, styles.gateConfirm]} onPress={confirmExit} disabled={verifying} testID="status-exit-confirm">
+                {verifying ? <ActivityIndicator color="#04121F" /> : <Text style={styles.gateConfirmText}>Sair</Text>}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -151,6 +229,22 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', padding: spacing.lg, gap: spacing.md },
   title: { color: D.text, fontSize: typography.xxl, fontWeight: '800' },
   subtitle: { color: D.sub, fontSize: typography.sm, marginTop: 2 },
+  liveTag: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(248,113,113,0.18)', paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radius.pill },
+  liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: D.danger },
+  liveText: { color: D.danger, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
+  gateRoot: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center', padding: spacing.xl },
+  gateCard: { width: '100%', maxWidth: 380, backgroundColor: D.card, borderRadius: radius.lg, borderWidth: 1, borderColor: D.border, padding: spacing.xl, alignItems: 'center' },
+  gateIcon: { width: 60, height: 60, borderRadius: 30, backgroundColor: D.head, alignItems: 'center', justifyContent: 'center', marginBottom: spacing.md },
+  gateTitle: { color: D.text, fontSize: typography.xl, fontWeight: '800' },
+  gateSub: { color: D.sub, fontSize: typography.base, textAlign: 'center', marginTop: spacing.sm, marginBottom: spacing.lg },
+  gateInput: { width: '100%', backgroundColor: D.bg, borderWidth: 1, borderColor: D.border, borderRadius: radius.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, fontSize: typography.xl, color: D.text, textAlign: 'center', letterSpacing: 8 },
+  gateError: { color: D.danger, fontSize: typography.base, marginTop: spacing.md, fontWeight: '600' },
+  gateActions: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.lg, width: '100%' },
+  gateBtn: { flex: 1, paddingVertical: spacing.lg, borderRadius: radius.md, alignItems: 'center' },
+  gateCancel: { backgroundColor: D.head },
+  gateCancelText: { color: D.text, fontWeight: '700', fontSize: typography.base },
+  gateConfirm: { backgroundColor: D.accent },
+  gateConfirmText: { color: '#04121F', fontWeight: '800', fontSize: typography.base },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   content: { padding: spacing.lg, paddingBottom: spacing.xxxl, gap: spacing.xl },
   alertBanner: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: D.danger, borderRadius: radius.md, padding: spacing.lg },
