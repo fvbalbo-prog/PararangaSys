@@ -1,3 +1,5 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
 
 export type Boat = { name: string; draft?: number | null; length?: number | null };
@@ -14,7 +16,27 @@ export type User = {
   boats?: (Boat | string)[];
   is_admin?: boolean;
   is_staff?: boolean;
+  // Session token issued by POST /login. Screens already persist the whole
+  // login response under the 'user' key in AsyncStorage, so this field rides
+  // along for free — req() below reads it back out from there to attach
+  // "Authorization: Bearer <token>" on every call.
+  token?: string;
 };
+
+/** Best-effort read of the token saved at login. Never throws: a missing or
+ * unparsable 'user' entry just means the request goes out unauthenticated,
+ * which is correct for endpoints that don't require a session (and will
+ * surface as a 401 from the backend for the ones that do). */
+async function authHeader(): Promise<Record<string, string>> {
+  try {
+    const raw = await AsyncStorage.getItem('user');
+    if (!raw) return {};
+    const user = JSON.parse(raw);
+    return user?.token ? { Authorization: `Bearer ${user.token}` } : {};
+  } catch {
+    return {};
+  }
+}
 
 export type RequestType = 'descida' | 'subida';
 export type RequestStatus = 'agendada' | 'cancelada' | 'concluida';
@@ -41,10 +63,12 @@ export type MarinaRequest = {
 };
 
 async function req<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const auth = await authHeader();
   const res = await fetch(`${BASE}/api${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      ...auth,
       ...(options.headers || {}),
     },
   });
@@ -88,8 +112,6 @@ export const api = {
   slots: (type: RequestType, date: string) =>
     req<SlotInfo[]>(`/slots?type=${type}&date=${date}`),
   getTides: (date: string) => req<TideDay>(`/tides/${date}`),
-  setTides: (date: string, points: { time: string; height: number }[]) =>
-    req<TideDay>(`/tides/${date}`, { method: 'PUT', body: JSON.stringify({ points }) }),
   listUsers: () => req<Client[]>('/users'),
   createClient: (data: { cpf: string; name: string; phone: string; boats: Boat[]; is_staff?: boolean }) =>
     req<Client>('/users', { method: 'POST', body: JSON.stringify(data) }),
@@ -115,7 +137,8 @@ export const api = {
     } else {
       form.append('file', { uri, name: filename, type } as any);
     }
-    const res = await fetch(`${BASE}/api/products/${id}/image`, { method: 'POST', body: form });
+    const auth = await authHeader();
+    const res = await fetch(`${BASE}/api/products/${id}/image`, { method: 'POST', body: form, headers: auth });
     if (!res.ok) {
       let msg = 'Falha no upload';
       try { msg = (await res.json()).detail || msg; } catch {}

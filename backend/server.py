@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Depends, Header
 from fastapi.responses import Response
 from fastapi.concurrency import run_in_threadpool
 from dotenv import load_dotenv
@@ -9,6 +9,8 @@ import re
 import logging
 import httpx
 import requests
+import jwt
+import secrets
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
@@ -24,6 +26,16 @@ def now_br() -> datetime:
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+
+# Logger is configured up-front (previously declared near the bottom of this
+# file, after routes that already referenced it — harmless at runtime since
+# module-level code all runs before any request, but confusing to read and
+# fragile to reorder).
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
@@ -111,6 +123,68 @@ DESCIDA_MIN = time(8, 30)
 DESCIDA_MAX = time(17, 0)
 SUBIDA_MIN = time(8, 30)
 SUBIDA_MAX = time(17, 30)
+
+
+# ===================== Auth (JWT) =====================
+# Minimal session layer: /login issues a signed token carrying cpf/is_admin/
+# is_staff; the frontend stores it alongside the user object it already
+# persists and sends it back as "Authorization: Bearer <token>". Endpoints
+# that only the marina's staff/admin should reach are gated with
+# require_admin / require_staff below. Endpoints reachable by any logged-in
+# client (booking, cancelling, ordering, etc.) are intentionally left open in
+# this pass — see ANALISE_ESTRUTURA.md for the follow-up items.
+JWT_SECRET = os.environ.get("JWT_SECRET", "").strip()
+if not JWT_SECRET:
+    # Random per-process secret rather than a fixed fallback: anyone who reads
+    # this source (it's public) would otherwise be able to forge admin tokens
+    # against any instance that forgets to set JWT_SECRET. The tradeoff is
+    # that restarting the process invalidates all existing sessions, which is
+    # acceptable outside of production and forces production to set the
+    # env var instead of silently running on a guessable key.
+    JWT_SECRET = secrets.token_hex(32)
+    logger.warning(
+        "JWT_SECRET não definido — usando chave aleatória gerada para este "
+        "processo (sessões existentes invalidam a cada restart). Defina "
+        "JWT_SECRET em produção para manter sessões estáveis entre deploys."
+    )
+JWT_ALG = "HS256"
+JWT_EXPIRE_DAYS = 30
+
+
+def create_token(user: dict) -> str:
+    now = datetime.now(timezone.utc)
+    payload = {
+        "cpf": user.get("cpf"),
+        "is_admin": bool(user.get("is_admin")),
+        "is_staff": bool(user.get("is_staff")),
+        "iat": now,
+        "exp": now + timedelta(days=JWT_EXPIRE_DAYS),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+
+
+async def get_current_claims(authorization: Optional[str] = Header(None)) -> dict:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Não autenticado. Faça login novamente.")
+    token = authorization.split(" ", 1)[1].strip()
+    try:
+        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Sessão expirada. Faça login novamente.")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Sessão inválida. Faça login novamente.")
+
+
+async def require_admin(claims: dict = Depends(get_current_claims)) -> dict:
+    if not claims.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Acesso restrito à administração da marina.")
+    return claims
+
+
+async def require_staff(claims: dict = Depends(get_current_claims)) -> dict:
+    if not (claims.get("is_admin") or claims.get("is_staff")):
+        raise HTTPException(status_code=403, detail="Acesso restrito à equipe da marina.")
+    return claims
 
 
 # ===================== Models =====================
@@ -229,6 +303,10 @@ async def next_available_slot(req_type: str, date: str, from_time: str) -> Optio
 
 
 async def enforce_capacity(payload: RequestBase, exclude_id: Optional[str] = None):
+    """Fast-fail pre-check: gives a friendly error (with the next open slot)
+    in the common case. Not race-proof by itself — two requests can both pass
+    this check for the same slot before either finishes inserting — so it's
+    paired with reconcile_slot_capacity() after the write actually lands."""
     if is_unlimited_slot(payload.type, payload.time):
         return
     count = await slot_count(payload.type, payload.date, payload.time, exclude_id)
@@ -239,6 +317,35 @@ async def enforce_capacity(payload: RequestBase, exclude_id: Optional[str] = Non
             status_code=409,
             detail=f"Horário {payload.time} lotado (limite de {SLOT_CAPACITY} lanchas).{suffix}",
         )
+
+
+async def reconcile_slot_capacity(req_type: str, date: str, hhmm: str, request_id: str) -> bool:
+    """Post-write guard against the race enforce_capacity can't close on its
+    own (standalone MongoDB here has no multi-document transactions to make
+    the earlier check-then-insert atomic). After a request is written into a
+    slot, re-read every active request in that exact slot ordered by
+    (created_at, id) and keep only the first SLOT_CAPACITY. If `request_id`
+    lost that tie-break, it's auto-cancelled and the caller should report a
+    409 — this bounds the overbooking window to "briefly visible", never
+    permanent, without needing a replica-set transaction."""
+    if is_unlimited_slot(req_type, hhmm):
+        return True
+    docs = await db.requests.find(
+        {"type": req_type, "date": date, "time": hhmm, "status": {"$ne": "cancelada"}},
+        {"_id": 0, "id": 1, "created_at": 1},
+    ).sort([("created_at", 1), ("id", 1)]).to_list(50)
+    keep_ids = {d["id"] for d in docs[:SLOT_CAPACITY]}
+    if request_id in keep_ids:
+        return True
+    await db.requests.update_one(
+        {"id": request_id},
+        {"$set": {
+            "status": "cancelada",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "auto_cancelled_reason": "slot_full_race",
+        }},
+    )
+    return False
 
 
 def validate_request_payload(payload: RequestBase):
@@ -335,6 +442,7 @@ async def login(payload: LoginInput):
         if up[-4:] == last4:
             if u.get("active") is False:
                 raise HTTPException(status_code=403, detail="Acesso desativado. Procure a administração da marina.")
+            u["token"] = create_token(u)
             return u
     raise HTTPException(status_code=404, detail="CPF ou celular não confere.")
 
@@ -365,13 +473,21 @@ async def create_request(payload: RequestCreate):
     doc["created_at"] = now_iso
     doc["updated_at"] = now_iso
     await db.requests.insert_one(doc)
+    ok = await reconcile_slot_capacity(payload.type, payload.date, payload.time, doc["id"])
+    if not ok:
+        nxt = await next_available_slot(payload.type, payload.date, payload.time)
+        suffix = f" Próximo horário disponível: {nxt}." if nxt else " Não há horários disponíveis neste dia."
+        raise HTTPException(
+            status_code=409,
+            detail=f"Horário {payload.time} lotado (limite de {SLOT_CAPACITY} lanchas).{suffix}",
+        )
     doc.pop("_id", None)
     return doc
 
 
 @api_router.get("/requests/today", response_model=List[RequestOut])
 async def get_today_requests(type: Optional[str] = None, cpf: Optional[str] = None):
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = now_br().strftime("%Y-%m-%d")
     query = {"date": today}
     if type in ("descida", "subida"):
         query["type"] = type
@@ -396,7 +512,7 @@ async def get_history(cpf: str):
 @api_router.get("/requests/day", response_model=List[RequestOut])
 async def get_day_requests(date: Optional[str] = None, type: Optional[str] = None):
     """All requests for a specific day (admin panel). Defaults to today."""
-    day = date or datetime.now().strftime("%Y-%m-%d")
+    day = date or now_br().strftime("%Y-%m-%d")
     query = {"date": day}
     if type in ("descida", "subida"):
         query["type"] = type
@@ -437,7 +553,11 @@ async def update_request(request_id: str, payload: RequestUpdate):
     if not existing:
         raise HTTPException(status_code=404, detail="Solicitação não encontrada.")
 
-    update_data = {k: v for k, v in payload.dict().items() if v is not None}
+    # exclude_unset (not "filter out None") so a field explicitly sent as
+    # null actually clears it — filtering on `v is not None` made it
+    # impossible to ever erase e.g. an observation via PUT, since an omitted
+    # field and an intentionally-cleared field looked identical.
+    update_data = payload.dict(exclude_unset=True)
     merged = {**existing, **update_data}
     # Re-validate merged
     revalidated = RequestBase(**{k: merged.get(k) for k in RequestBase.__fields__.keys()})
@@ -445,6 +565,15 @@ async def update_request(request_id: str, payload: RequestUpdate):
     await enforce_capacity(revalidated, exclude_id=request_id)
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     await db.requests.update_one({"id": request_id}, {"$set": update_data})
+    if "time" in update_data or "date" in update_data:
+        ok = await reconcile_slot_capacity(revalidated.type, revalidated.date, revalidated.time, request_id)
+        if not ok:
+            nxt = await next_available_slot(revalidated.type, revalidated.date, revalidated.time)
+            suffix = f" Próximo horário disponível: {nxt}." if nxt else " Não há horários disponíveis neste dia."
+            raise HTTPException(
+                status_code=409,
+                detail=f"Horário {revalidated.time} lotado (limite de {SLOT_CAPACITY} lanchas).{suffix}",
+            )
     doc = await db.requests.find_one({"id": request_id}, {"_id": 0})
     return doc
 
@@ -474,7 +603,7 @@ async def confirm_return(request_id: str):
     return await db.requests.find_one({"id": request_id}, {"_id": 0})
 
 
-@api_router.patch("/requests/{request_id}/complete", response_model=RequestOut)
+@api_router.patch("/requests/{request_id}/complete", response_model=RequestOut, dependencies=[Depends(require_staff)])
 async def complete_request(request_id: str):
     """Admin marks a descida/subida as completed (concluída)."""
     existing = await db.requests.find_one({"id": request_id}, {"_id": 0})
@@ -528,7 +657,7 @@ async def read_all_notifications(cpf: str):
     return {"ok": True}
 
 
-@api_router.patch("/requests/{request_id}/reopen", response_model=RequestOut)
+@api_router.patch("/requests/{request_id}/reopen", response_model=RequestOut, dependencies=[Depends(require_staff)])
 async def reopen_request(request_id: str):
     """Staff correction: revert a completed request back to 'aguardando'."""
     existing = await db.requests.find_one({"id": request_id}, {"_id": 0})
@@ -646,7 +775,7 @@ def _boat_name(b) -> str:
     return b if isinstance(b, str) else (b.get("name") if isinstance(b, dict) else "")
 
 
-@api_router.get("/users", response_model=List[User])
+@api_router.get("/users", response_model=List[User], dependencies=[Depends(require_admin)])
 async def list_users():
     docs = await db.users.find(
         {"is_admin": {"$ne": True}}, {"_id": 0}
@@ -657,7 +786,7 @@ async def list_users():
     return docs
 
 
-@api_router.post("/users", response_model=User)
+@api_router.post("/users", response_model=User, dependencies=[Depends(require_admin)])
 async def create_client(payload: ClientInput):
     cpf = normalize_cpf(payload.cpf)
     if len(cpf) != 11:
@@ -685,7 +814,7 @@ class ActiveInput(BaseModel):
     active: bool
 
 
-@api_router.patch("/users/{cpf}/active", response_model=User)
+@api_router.patch("/users/{cpf}/active", response_model=User, dependencies=[Depends(require_admin)])
 async def set_user_active(cpf: str, payload: ActiveInput):
     cpf_clean = normalize_cpf(cpf)
     res = await db.users.update_one({"cpf": cpf_clean}, {"$set": {"active": payload.active}})
@@ -696,7 +825,7 @@ async def set_user_active(cpf: str, payload: ActiveInput):
     return u
 
 
-@api_router.post("/users/{cpf}/boats", response_model=User)
+@api_router.post("/users/{cpf}/boats", response_model=User, dependencies=[Depends(require_admin)])
 async def add_boat(cpf: str, payload: BoatInput):
     cpf_clean = normalize_cpf(cpf)
     user = await db.users.find_one({"cpf": cpf_clean}, {"_id": 0})
@@ -716,7 +845,7 @@ async def add_boat(cpf: str, payload: BoatInput):
     return await db.users.find_one({"cpf": cpf_clean}, {"_id": 0})
 
 
-@api_router.delete("/users/{cpf}/boats", response_model=User)
+@api_router.delete("/users/{cpf}/boats", response_model=User, dependencies=[Depends(require_admin)])
 async def remove_boat(cpf: str, boat: str):
     cpf_clean = normalize_cpf(cpf)
     user = await db.users.find_one({"cpf": cpf_clean}, {"_id": 0})
@@ -771,7 +900,7 @@ async def list_products(all: bool = False):
     return docs
 
 
-@api_router.post("/products")
+@api_router.post("/products", dependencies=[Depends(require_admin)])
 async def create_product(payload: ProductInput):
     name = payload.name.strip()
     if not name:
@@ -791,7 +920,7 @@ async def create_product(payload: ProductInput):
     return doc
 
 
-@api_router.put("/products/{pid}")
+@api_router.put("/products/{pid}", dependencies=[Depends(require_admin)])
 async def update_product(pid: str, payload: ProductUpdate):
     update = {k: v for k, v in payload.dict().items() if v is not None}
     if "name" in update:
@@ -808,7 +937,7 @@ async def update_product(pid: str, payload: ProductUpdate):
     return await db.products.find_one({"id": pid}, {"_id": 0})
 
 
-@api_router.post("/products/{pid}/image")
+@api_router.post("/products/{pid}/image", dependencies=[Depends(require_admin)])
 async def upload_product_image(pid: str, file: UploadFile = File(...)):
     product = await db.products.find_one({"id": pid}, {"_id": 0})
     if not product:
@@ -833,6 +962,12 @@ async def upload_product_image(pid: str, file: UploadFile = File(...)):
 
 @api_router.get("/files/{path:path}")
 async def serve_file(path: str):
+    # This is a public, unauthenticated proxy in front of shared object
+    # storage — without this prefix check, `path` was passed straight
+    # through, so any caller could probe/read any object in that storage
+    # account, not just this app's own uploads.
+    if ".." in path or not path.startswith(f"{APP_NAME}/uploads/"):
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado.")
     try:
         content, content_type = await run_in_threadpool(get_object, path)
     except Exception as e:
@@ -841,7 +976,7 @@ async def serve_file(path: str):
     return Response(content=content, media_type=content_type, headers={"Cache-Control": "public, max-age=86400"})
 
 
-@api_router.delete("/products/{pid}")
+@api_router.delete("/products/{pid}", dependencies=[Depends(require_admin)])
 async def delete_product(pid: str):
     res = await db.products.delete_one({"id": pid})
     if res.deleted_count == 0:
@@ -892,7 +1027,7 @@ async def list_orders(cpf: Optional[str] = None):
     return docs
 
 
-@api_router.patch("/convenience/orders/{oid}/status")
+@api_router.patch("/convenience/orders/{oid}/status", dependencies=[Depends(require_staff)])
 async def set_order_status(oid: str, status: str):
     if status not in ("pendente", "em_preparo", "pronto", "entregue", "cancelada"):
         raise HTTPException(status_code=400, detail="Status inválido.")
@@ -904,7 +1039,7 @@ async def set_order_status(oid: str, status: str):
     return await db.convenience_orders.find_one({"id": oid}, {"_id": 0})
 
 
-@api_router.get("/reports/weekly")
+@api_router.get("/reports/weekly", dependencies=[Depends(require_admin)])
 async def weekly_report():
     """Últimos 7 dias: contagem de movimentações e faturamento (conveniência + reboque) por dia."""
     today = datetime.now(timezone.utc).date()
@@ -1010,7 +1145,7 @@ async def cancel_authorization(aid: str):
     return await db.authorizations.find_one({"id": aid}, {"_id": 0})
 
 
-@api_router.patch("/authorizations/{aid}/checkin")
+@api_router.patch("/authorizations/{aid}/checkin", dependencies=[Depends(require_staff)])
 async def checkin_authorization(aid: str):
     now_iso = datetime.now(timezone.utc).isoformat()
     res = await db.authorizations.update_one(
@@ -1189,7 +1324,7 @@ async def list_emergencies(cpf: Optional[str] = None, status: Optional[str] = No
     return docs
 
 
-@api_router.patch("/emergencies/{eid}/bill")
+@api_router.patch("/emergencies/{eid}/bill", dependencies=[Depends(require_admin)])
 async def bill_emergency(eid: str, payload: BillInput):
     now_iso = datetime.now(timezone.utc).isoformat()
     res = await db.emergencies.update_one(
@@ -1201,7 +1336,7 @@ async def bill_emergency(eid: str, payload: BillInput):
     return await db.emergencies.find_one({"id": eid}, {"_id": 0})
 
 
-@api_router.patch("/emergencies/{eid}/resolve")
+@api_router.patch("/emergencies/{eid}/resolve", dependencies=[Depends(require_staff)])
 async def resolve_emergency(eid: str):
     now_iso = datetime.now(timezone.utc).isoformat()
     res = await db.emergencies.update_one(
@@ -1224,7 +1359,7 @@ async def cancel_emergency(eid: str):
 
 
 # ===================== Relatório de consumo (cobrança mensal) =====================
-@api_router.get("/reports/consumo")
+@api_router.get("/reports/consumo", dependencies=[Depends(require_admin)])
 async def consumo_report(month: Optional[str] = None, cpf: Optional[str] = None):
     """month = YYYY-MM. Agrupa por cliente o consumo de conveniência (pedidos
     não cancelados) e reboques faturados (billed_amount) no mês."""
@@ -1291,7 +1426,7 @@ class StatementSend(BaseModel):
     month: str  # YYYY-MM
 
 
-@api_router.post("/statements/send")
+@api_router.post("/statements/send", dependencies=[Depends(require_admin)])
 async def send_statement(payload: StatementSend):
     cpf = normalize_cpf(payload.cpf)
     user = await db.users.find_one({"cpf": cpf}, {"_id": 0})
@@ -1386,19 +1521,31 @@ async def seed_users():
 # Include the router
 app.include_router(api_router)
 
+# CORS_ORIGINS: comma-separated list of allowed origins (e.g. the deployed web
+# app's URL). Falls back to "*" (any origin) if unset, matching prior behavior,
+# but then allow_credentials must stay False — the "*" + credentials=True
+# combination is rejected by browsers anyway and was never doing anything
+# useful. Set CORS_ORIGINS explicitly in production to lock this down and get
+# real credentialed-CORS if you ever need it.
+_cors_origins_env = os.environ.get("CORS_ORIGINS", "").strip()
+if _cors_origins_env:
+    _cors_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
+    _cors_credentials = True
+else:
+    _cors_origins = ["*"]
+    _cors_credentials = False
+    logger.warning(
+        "CORS_ORIGINS não definido — liberando qualquer origem (allow_credentials=False). "
+        "Defina CORS_ORIGINS em produção com o(s) domínio(s) real(is) do app."
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=["*"],
+    allow_credentials=_cors_credentials,
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 
 @app.on_event("shutdown")
