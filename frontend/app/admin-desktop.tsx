@@ -35,6 +35,7 @@ export default function AdminDesktopScreen() {
   const [orders, setOrders] = useState<ConvenienceOrder[]>([]);
   const [emergencies, setEmergencies] = useState<Emergency[]>([]);
   const [weekly, setWeekly] = useState<WeeklyDay[]>([]);
+  const [mensalidadesVencendo, setMensalidadesVencendo] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -46,14 +47,16 @@ export default function AdminDesktopScreen() {
     const raw = await AsyncStorage.getItem('user');
     if (!raw) return router.replace('/');
     try {
-      const [reqs, ords, emgs] = await Promise.all([
+      const [reqs, ords, emgs, mensalidades] = await Promise.all([
         api.dayRequests(iso),
         api.listOrders().catch(() => []),
         api.listEmergencies().catch(() => []),
+        api.mensalidadesVencendo().catch(() => []),
       ]);
       setItems(reqs);
       setOrders(ords);
       setEmergencies(emgs);
+      setMensalidadesVencendo(mensalidades.length);
       api.weeklyReport().then(setWeekly).catch(() => {});
     } catch {
       setItems([]);
@@ -107,6 +110,7 @@ export default function AdminDesktopScreen() {
     { label: 'Aguardando', value: aguardando, icon: 'hourglass', color: '#B45309' },
     { label: 'Atrasos', value: atrasos, icon: 'warning', color: colors.error },
     { label: 'Emergências', value: openEmg.length, icon: 'alert-circle', color: colors.error },
+    { label: 'Mensalidades', value: mensalidadesVencendo, icon: 'cash-outline', color: '#B45309' },
   ];
 
   return (

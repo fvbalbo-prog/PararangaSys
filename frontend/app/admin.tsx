@@ -60,19 +60,22 @@ export default function AdminScreen() {
   const [generating, setGenerating] = useState(false);
   const [orderTotals, setOrderTotals] = useState<Record<string, number>>({});
   const [openEmergencies, setOpenEmergencies] = useState(0);
+  const [mensalidadesVencendo, setMensalidadesVencendo] = useState(0);
 
   const load = useCallback(async () => {
     try {
       const raw = await AsyncStorage.getItem('user');
       if (!raw) return router.replace('/');
       const iso = toISO(day);
-      const [data, orders, emgs] = await Promise.all([
+      const [data, orders, emgs, mensalidades] = await Promise.all([
         api.dayRequests(iso),
         api.listOrders().catch(() => []),
         api.listEmergencies(undefined, 'aberta').catch(() => []),
+        api.mensalidadesVencendo().catch(() => []),
       ]);
       setItems(data);
       setOpenEmergencies(emgs.length);
+      setMensalidadesVencendo(mensalidades.length);
       const totals: Record<string, number> = {};
       for (const o of orders) {
         if (o.status === 'cancelada') continue;
@@ -351,6 +354,19 @@ export default function AdminScreen() {
           <Ionicons name="alert-circle" size={20} color="#FFFFFF" />
           <Text style={styles.emgText}>
             {openEmergencies === 1 ? '1 emergência aberta!' : `${openEmergencies} emergências abertas!`} Toque para atender
+          </Text>
+        </Pressable>
+      ) : null}
+
+      {mensalidadesVencendo > 0 ? (
+        <Pressable
+          testID="admin-mensalidades-banner"
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-cad-clientes'); }}
+          style={styles.mensalidadeBanner}
+        >
+          <Ionicons name="cash-outline" size={20} color="#FFFFFF" />
+          <Text style={styles.emgText}>
+            {mensalidadesVencendo === 1 ? '1 mensalidade vencendo!' : `${mensalidadesVencendo} mensalidades vencendo!`} Toque para revisar
           </Text>
         </Pressable>
       ) : null}
@@ -659,6 +675,17 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
   },
   emgText: { color: '#FFFFFF', fontSize: typography.base, fontWeight: '800', flex: 1 },
+  mensalidadeBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: '#B45309',
+    marginHorizontal: spacing.xl,
+    marginTop: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
+  },
   dateNav: {
     flexDirection: 'row',
     alignItems: 'center',

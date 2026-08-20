@@ -9,8 +9,10 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { AppDialog, type DialogButton } from '@/src/components/AppDialog';
+import { DateField } from '@/src/components/DateField';
+import { formatMoney } from '@/src/format';
 import { api } from '@/src/api';
-import type { Client } from '@/src/api';
+import type { Client, Boat } from '@/src/api';
 
 function formatCpf(v: string) {
   const d = v.replace(/\D/g, '').slice(0, 11);
@@ -18,6 +20,21 @@ function formatCpf(v: string) {
   if (d.length > 6) return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6)}`;
   if (d.length > 3) return `${d.slice(0, 3)}.${d.slice(3)}`;
   return d;
+}
+function pad(n: number) {
+  return n.toString().padStart(2, '0');
+}
+function dateToISO(d: Date) {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+function brDate(iso: string) {
+  const [y, m, d] = iso.split('-');
+  return `${d}/${m}/${y}`;
+}
+function daysUntil(iso: string): number {
+  const today = new Date();
+  const target = new Date(`${iso}T00:00:00`);
+  return Math.round((target.getTime() - new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()) / 86400000);
 }
 
 export default function AdminCadClientesScreen() {
@@ -32,9 +49,12 @@ export default function AdminCadClientesScreen() {
   const [cPhone, setCPhone] = useState('');
 
   const [boatModalCpf, setBoatModalCpf] = useState<string | null>(null);
+  const [boatEditName, setBoatEditName] = useState<string | null>(null);
   const [boatName, setBoatName] = useState('');
   const [boatDraft, setBoatDraft] = useState('');
   const [boatLength, setBoatLength] = useState('');
+  const [boatFee, setBoatFee] = useState('');
+  const [boatFeeValidUntil, setBoatFeeValidUntil] = useState<Date | null>(null);
 
   const [saving, setSaving] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
@@ -102,19 +122,34 @@ export default function AdminCadClientesScreen() {
   };
 
   const openBoatModal = (cpf: string) => {
-    setBoatModalCpf(cpf); setBoatName(''); setBoatDraft(''); setBoatLength(''); setModalError(null);
+    setBoatModalCpf(cpf); setBoatEditName(null);
+    setBoatName(''); setBoatDraft(''); setBoatLength(''); setBoatFee(''); setBoatFeeValidUntil(null);
+    setModalError(null);
+  };
+
+  const openEditBoatModal = (cpf: string, boat: Boat) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setBoatModalCpf(cpf); setBoatEditName(boat.name);
+    setBoatName(boat.name);
+    setBoatDraft(boat.draft != null ? String(boat.draft) : '');
+    setBoatLength(boat.length != null ? String(boat.length) : '');
+    setBoatFee(boat.monthly_fee != null ? String(boat.monthly_fee) : '');
+    setBoatFeeValidUntil(boat.monthly_fee_valid_until ? new Date(`${boat.monthly_fee_valid_until}T00:00:00`) : null);
+    setModalError(null);
   };
 
   const submitBoat = async () => {
     if (!boatModalCpf) return;
     if (!boatName.trim()) { setModalError('Informe o nome da lancha.'); return; }
+    const draft = boatDraft ? parseFloat(boatDraft.replace(',', '.')) : null;
+    const length = boatLength ? parseFloat(boatLength.replace(',', '.')) : null;
+    const monthly_fee = boatFee ? parseFloat(boatFee.replace(',', '.')) : null;
+    const monthly_fee_valid_until = boatFeeValidUntil ? dateToISO(boatFeeValidUntil) : null;
     try {
       setSaving(true);
-      const updated = await api.addBoat(boatModalCpf, {
-        name: boatName.trim(),
-        draft: boatDraft ? parseFloat(boatDraft.replace(',', '.')) : null,
-        length: boatLength ? parseFloat(boatLength.replace(',', '.')) : null,
-      });
+      const updated = boatEditName
+        ? await api.updateBoat(boatModalCpf, boatEditName, { draft, length, monthly_fee, monthly_fee_valid_until })
+        : await api.addBoat(boatModalCpf, { name: boatName.trim(), draft, length, monthly_fee, monthly_fee_valid_until });
       setClients((prev) => prev.map((c) => (c.cpf === updated.cpf ? updated : c)));
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setBoatModalCpf(null);
@@ -193,20 +228,34 @@ export default function AdminCadClientesScreen() {
                 {item.boats.length === 0 ? (
                   <Text style={styles.noBoats}>Nenhuma lancha cadastrada.</Text>
                 ) : (
-                  item.boats.map((b) => (
-                    <View key={b.name} style={styles.boatRow} testID={`boat-${item.cpf}-${b.name}`}>
-                      <Ionicons name="boat" size={18} color={colors.brandPrimary} />
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.boatName}>{b.name}</Text>
-                        <Text style={styles.boatSpec}>
-                          Calado: {b.draft != null ? `${b.draft} m` : '—'} • Comprimento: {b.length != null ? `${b.length} pés` : '—'}
-                        </Text>
-                      </View>
-                      <Pressable testID={`remove-boat-${item.cpf}-${b.name}`} hitSlop={8} onPress={() => removeBoat(item.cpf, b.name)} style={styles.trashBtn}>
-                        <Ionicons name="trash-outline" size={18} color={colors.error} />
+                  item.boats.map((b) => {
+                    const expiring = b.monthly_fee_valid_until != null && daysUntil(b.monthly_fee_valid_until) <= 30;
+                    return (
+                      <Pressable key={b.name} onPress={() => openEditBoatModal(item.cpf, b)} style={styles.boatRow} testID={`boat-${item.cpf}-${b.name}`}>
+                        <Ionicons name="boat" size={18} color={colors.brandPrimary} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.boatName}>{b.name}</Text>
+                          <Text style={styles.boatSpec}>
+                            Calado: {b.draft != null ? `${b.draft} m` : '—'} • Comprimento: {b.length != null ? `${b.length} pés` : '—'}
+                          </Text>
+                          {b.monthly_fee != null ? (
+                            <Text style={styles.boatSpec}>Mensalidade: {formatMoney(b.monthly_fee)}{b.monthly_fee_valid_until ? ` • válida até ${brDate(b.monthly_fee_valid_until)}` : ''}</Text>
+                          ) : null}
+                          {expiring ? (
+                            <View style={styles.expiringTag} testID={`boat-expiring-${item.cpf}-${b.name}`}>
+                              <Ionicons name="alert-circle" size={12} color={colors.error} />
+                              <Text style={styles.expiringText}>
+                                {daysUntil(b.monthly_fee_valid_until!) < 0 ? 'Mensalidade vencida' : `Vence em ${daysUntil(b.monthly_fee_valid_until!)} dia(s)`}
+                              </Text>
+                            </View>
+                          ) : null}
+                        </View>
+                        <Pressable testID={`remove-boat-${item.cpf}-${b.name}`} hitSlop={8} onPress={() => removeBoat(item.cpf, b.name)} style={styles.trashBtn}>
+                          <Ionicons name="trash-outline" size={18} color={colors.error} />
+                        </Pressable>
                       </Pressable>
-                    </View>
-                  ))
+                    );
+                  })
                 )}
                 <Pressable testID={`add-boat-${item.cpf}`} onPress={() => openBoatModal(item.cpf)} style={({ pressed }) => [styles.addBoatBtn, pressed && { opacity: 0.85 }]}>
                   <Ionicons name="add-circle-outline" size={18} color={colors.brandPrimary} />
@@ -259,14 +308,19 @@ export default function AdminCadClientesScreen() {
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalRoot}>
           <Pressable style={styles.modalBackdrop} onPress={() => setBoatModalCpf(null)} />
           <View style={styles.modalSheet}>
-            <Text style={styles.modalTitle}>Nova lancha</Text>
+            <Text style={styles.modalTitle}>{boatEditName ? 'Editar lancha' : 'Nova lancha'}</Text>
             <ScrollView keyboardShouldPersistTaps="handled">
               <Text style={styles.fieldLabel}>Nome da lancha</Text>
-              <TextInput testID="boat-name-input" style={styles.input} value={boatName} onChangeText={setBoatName} placeholder="Ex.: Netuno" placeholderTextColor={colors.onSurfaceTertiary} />
+              <TextInput testID="boat-name-input" style={[styles.input, boatEditName ? styles.inputDisabled : null]} value={boatName} onChangeText={setBoatName} editable={!boatEditName} placeholder="Ex.: Netuno" placeholderTextColor={colors.onSurfaceTertiary} />
               <Text style={styles.fieldLabel}>Calado (metros)</Text>
               <TextInput testID="boat-draft-input" style={styles.input} value={boatDraft} onChangeText={setBoatDraft} placeholder="Ex.: 0.8" placeholderTextColor={colors.onSurfaceTertiary} keyboardType="decimal-pad" inputMode="decimal" />
               <Text style={styles.fieldLabel}>Comprimento (pés)</Text>
               <TextInput testID="boat-length-input" style={styles.input} value={boatLength} onChangeText={setBoatLength} placeholder="Ex.: 24" placeholderTextColor={colors.onSurfaceTertiary} keyboardType="decimal-pad" inputMode="decimal" />
+              <Text style={styles.fieldLabel}>Valor da mensalidade (R$)</Text>
+              <TextInput testID="boat-fee-input" style={styles.input} value={boatFee} onChangeText={setBoatFee} placeholder="Ex.: 800,00" placeholderTextColor={colors.onSurfaceTertiary} keyboardType="decimal-pad" inputMode="decimal" />
+              <View style={{ marginTop: spacing.sm }}>
+                <DateField testID="boat-fee-valid-until" label="Validade do valor da mensalidade" mode="date" value={boatFeeValidUntil} onChange={setBoatFeeValidUntil} />
+              </View>
               {modalError ? <Text style={styles.modalError}>{modalError}</Text> : null}
             </ScrollView>
             <View style={styles.modalActions}>
@@ -311,6 +365,8 @@ const styles = StyleSheet.create({
   boatRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: colors.surface, borderRadius: radius.sm, padding: spacing.md, marginBottom: spacing.sm, borderWidth: 1, borderColor: colors.border },
   boatName: { color: colors.onSurface, fontSize: typography.base, fontWeight: '700' },
   boatSpec: { color: colors.onSurfaceSecondary, fontSize: typography.sm, marginTop: 2 },
+  expiringTag: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
+  expiringText: { color: colors.error, fontSize: typography.sm, fontWeight: '700' },
   trashBtn: { padding: spacing.xs },
   addBoatBtn: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.sm, marginTop: spacing.xs },
   addBoatText: { color: colors.brandPrimary, fontSize: typography.base, fontWeight: '700' },
@@ -322,6 +378,7 @@ const styles = StyleSheet.create({
   modalTitle: { color: colors.onSurface, fontSize: typography.xl, fontWeight: '800', marginBottom: spacing.lg },
   fieldLabel: { color: colors.onSurface, fontSize: typography.base, fontWeight: '600', marginBottom: spacing.sm, marginTop: spacing.sm },
   input: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, fontSize: typography.lg, color: colors.onSurface, backgroundColor: colors.surfaceSecondary },
+  inputDisabled: { opacity: 0.6 },
   modalError: { color: colors.error, fontSize: typography.base, marginTop: spacing.md },
   modalActions: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.lg },
   modalBtn: { flex: 1, paddingVertical: spacing.lg, borderRadius: radius.md, alignItems: 'center' },

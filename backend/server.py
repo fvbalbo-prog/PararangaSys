@@ -192,6 +192,8 @@ class Boat(BaseModel):
     name: str
     draft: Optional[float] = None   # calado em metros
     length: Optional[float] = None  # comprimento em pés
+    monthly_fee: Optional[float] = None            # valor da mensalidade (R$)
+    monthly_fee_valid_until: Optional[str] = None  # validade do valor, YYYY-MM-DD
 
 
 class User(BaseModel):
@@ -768,6 +770,15 @@ class BoatInput(BaseModel):
     name: str
     draft: Optional[float] = None
     length: Optional[float] = None
+    monthly_fee: Optional[float] = None
+    monthly_fee_valid_until: Optional[str] = None
+
+
+class BoatUpdate(BaseModel):
+    draft: Optional[float] = None
+    length: Optional[float] = None
+    monthly_fee: Optional[float] = None
+    monthly_fee_valid_until: Optional[str] = None
 
 
 def _boat_name(b) -> str:
@@ -837,11 +848,34 @@ async def add_boat(cpf: str, payload: BoatInput):
     boats = [b if isinstance(b, dict) else {"name": b} for b in user.get("boats", [])]
     if any(_boat_name(b) == name for b in boats):
         raise HTTPException(status_code=409, detail="Lancha já cadastrada.")
-    boats.append({"name": name, "draft": payload.draft, "length": payload.length})
+    boats.append({
+        "name": name,
+        "draft": payload.draft,
+        "length": payload.length,
+        "monthly_fee": payload.monthly_fee,
+        "monthly_fee_valid_until": payload.monthly_fee_valid_until,
+    })
     update = {"boats": boats}
     if not user.get("boat_name"):
         update["boat_name"] = name
     await db.users.update_one({"cpf": cpf_clean}, {"$set": update})
+    return await db.users.find_one({"cpf": cpf_clean}, {"_id": 0})
+
+
+@api_router.put("/users/{cpf}/boats/{name}", response_model=User, dependencies=[Depends(require_admin)])
+async def update_boat(cpf: str, name: str, payload: BoatUpdate):
+    cpf_clean = normalize_cpf(cpf)
+    user = await db.users.find_one({"cpf": cpf_clean}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+    boats = [b if isinstance(b, dict) else {"name": b} for b in user.get("boats", [])]
+    if not any(_boat_name(b) == name for b in boats):
+        raise HTTPException(status_code=404, detail="Lancha não encontrada.")
+    updates = payload.dict(exclude_unset=True)
+    for b in boats:
+        if _boat_name(b) == name:
+            b.update(updates)
+    await db.users.update_one({"cpf": cpf_clean}, {"$set": {"boats": boats}})
     return await db.users.find_one({"cpf": cpf_clean}, {"_id": 0})
 
 
@@ -858,6 +892,39 @@ async def remove_boat(cpf: str, boat: str):
         update["boat_name"] = _boat_name(boats[0]) if boats else ""
     await db.users.update_one({"cpf": cpf_clean}, {"$set": update})
     return await db.users.find_one({"cpf": cpf_clean}, {"_id": 0})
+
+
+@api_router.get("/users/mensalidades/vencendo", dependencies=[Depends(require_admin)])
+async def mensalidades_vencendo(days: int = 30):
+    """Lanchas cujo valor de mensalidade vence dentro de `days` dias (padrão 30
+    — avisa o admin com 1 mês de antecedência), incluindo as já vencidas, para
+    que o valor seja revisto/renovado. Calculado sob demanda, sem agendador."""
+    today = now_br().date()
+    limit = today + timedelta(days=days)
+    users = await db.users.find({"is_staff": {"$ne": True}}, {"_id": 0}).to_list(2000)
+    result = []
+    for u in users:
+        for b in u.get("boats", []):
+            if not isinstance(b, dict):
+                continue
+            valid_until = b.get("monthly_fee_valid_until")
+            if not valid_until:
+                continue
+            try:
+                due = date_cls.fromisoformat(valid_until)
+            except ValueError:
+                continue
+            if due <= limit:
+                result.append({
+                    "cpf": u["cpf"],
+                    "client_name": u["name"],
+                    "boat_name": b.get("name"),
+                    "monthly_fee": b.get("monthly_fee"),
+                    "valid_until": valid_until,
+                    "days_remaining": (due - today).days,
+                })
+    result.sort(key=lambda x: x["valid_until"])
+    return result
 
 
 # ===================== Conveniência (produtos + pedidos) =====================

@@ -2,7 +2,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
 
-export type Boat = { name: string; draft?: number | null; length?: number | null };
+export type Boat = {
+  name: string;
+  draft?: number | null;
+  length?: number | null;
+  monthly_fee?: number | null;
+  monthly_fee_valid_until?: string | null; // YYYY-MM-DD
+};
 
 export function boatName(b: Boat | string): string {
   return typeof b === 'string' ? b : b.name;
@@ -117,10 +123,13 @@ export const api = {
     req<Client>('/users', { method: 'POST', body: JSON.stringify(data) }),
   setUserActive: (cpf: string, active: boolean) =>
     req<Client>(`/users/${cpf}/active`, { method: 'PATCH', body: JSON.stringify({ active }) }),
-  addBoat: (cpf: string, boat: { name: string; draft?: number | null; length?: number | null }) =>
+  addBoat: (cpf: string, boat: { name: string; draft?: number | null; length?: number | null; monthly_fee?: number | null; monthly_fee_valid_until?: string | null }) =>
     req<Client>(`/users/${cpf}/boats`, { method: 'POST', body: JSON.stringify(boat) }),
+  updateBoat: (cpf: string, name: string, data: Partial<{ draft: number | null; length: number | null; monthly_fee: number | null; monthly_fee_valid_until: string | null }>) =>
+    req<Client>(`/users/${cpf}/boats/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(data) }),
   removeBoat: (cpf: string, boat: string) =>
     req<Client>(`/users/${cpf}/boats?boat=${encodeURIComponent(boat)}`, { method: 'DELETE' }),
+  mensalidadesVencendo: (days = 30) => req<MensalidadeVencendo[]>(`/users/mensalidades/vencendo?days=${days}`),
   // Conveniência
   listProducts: (all = false) => req<Product[]>(`/products${all ? '?all=true' : ''}`),
   createProduct: (data: { name: string; price: number; category?: string }) =>
@@ -442,6 +451,15 @@ export type Client = {
   boat_name?: string;
   is_staff?: boolean;
   active?: boolean;
+};
+
+export type MensalidadeVencendo = {
+  cpf: string;
+  client_name: string;
+  boat_name: string;
+  monthly_fee?: number | null;
+  valid_until: string; // YYYY-MM-DD
+  days_remaining: number;
 };
 
 export type PontoType = 'entrada' | 'saida_almoco' | 'retorno_almoco' | 'saida_final';
