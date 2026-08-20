@@ -315,6 +315,9 @@ export default function AdminFinanceiroScreen() {
           <Text style={styles.title} testID="admin-financeiro-title">Painel Financeiro</Text>
           <Text style={styles.subtitle}>Contas a pagar e a receber</Text>
         </View>
+        <Pressable onPress={() => router.push('/admin-financeiro-analise')} testID="financeiro-analise-button" style={styles.iconBtn} hitSlop={12}>
+          <Ionicons name="bar-chart-outline" size={22} color={colors.onSurface} />
+        </Pressable>
         <Pressable onPress={openRecorrencias} testID="financeiro-recorrencias-button" style={styles.iconBtn} hitSlop={12}>
           <Ionicons name="repeat" size={22} color={colors.onSurface} />
         </Pressable>

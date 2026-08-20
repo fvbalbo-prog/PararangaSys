@@ -1905,6 +1905,51 @@ async def resumo_financeiro(month: Optional[str] = None):
     return {"month": month, **totals, "saldo_previsto": saldo_previsto}
 
 
+@api_router.get("/financeiro/analise", dependencies=[Depends(require_admin)])
+async def analise_financeira(date_from: str, date_to: str):
+    """Consulta por período (ou o ano inteiro, passando 1º de janeiro a 31 de
+    dezembro) para a tela de análise financeira: total e detalhamento por
+    categoria de cada lado (pagar/receber), mais a série mensal para o
+    gráfico de evolução. Base: valor total por due_date no período, mesmo
+    critério do /resumo — não filtra por status pago/pendente."""
+    docs = await db.financeiro.find(
+        {"due_date": {"$gte": date_from, "$lte": date_to}}, {"_id": 0}
+    ).to_list(10000)
+
+    def by_category(kind: str) -> list:
+        totals: dict = {}
+        for d in docs:
+            if d["kind"] != kind:
+                continue
+            totals[d["category"]] = totals.get(d["category"], 0.0) + d["amount"]
+        return sorted(
+            [{"category": c, "total": round(v, 2)} for c, v in totals.items()],
+            key=lambda x: x["total"],
+            reverse=True,
+        )
+
+    by_month: dict = {}
+    for d in docs:
+        key = d["due_date"][:7]
+        b = by_month.setdefault(key, {"month": key, "pagar": 0.0, "receber": 0.0})
+        b[d["kind"]] += d["amount"]
+    months = sorted(by_month.values(), key=lambda x: x["month"])
+    for m in months:
+        m["pagar"] = round(m["pagar"], 2)
+        m["receber"] = round(m["receber"], 2)
+
+    receber_total = round(sum(d["amount"] for d in docs if d["kind"] == "receber"), 2)
+    pagar_total = round(sum(d["amount"] for d in docs if d["kind"] == "pagar"), 2)
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "receber": {"total": receber_total, "by_category": by_category("receber")},
+        "pagar": {"total": pagar_total, "by_category": by_category("pagar")},
+        "saldo": round(receber_total - pagar_total, 2),
+        "by_month": months,
+    }
+
+
 # ===================== Fornecedores =====================
 class FornecedorInput(BaseModel):
     name: str

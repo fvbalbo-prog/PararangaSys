@@ -254,6 +254,8 @@ export const api = {
   reopenFinanceiro: (id: string) => req<FinanceiroEntry>(`/financeiro/${id}/reabrir`, { method: 'PATCH' }),
   deleteFinanceiro: (id: string) => req<{ ok: boolean }>(`/financeiro/${id}`, { method: 'DELETE' }),
   resumoFinanceiro: (month?: string) => req<FinanceiroResumo>(`/financeiro/resumo${month ? `?month=${month}` : ''}`),
+  analiseFinanceira: (dateFrom: string, dateTo: string) =>
+    req<AnaliseFinanceira>(`/financeiro/analise?date_from=${dateFrom}&date_to=${dateTo}`),
   // Fornecedores
   createFornecedor: (data: { name: string; category?: string | null; phone?: string | null; email?: string | null; document?: string | null; observation?: string | null }) =>
     req<Fornecedor>('/fornecedores', { method: 'POST', body: JSON.stringify(data) }),
@@ -500,6 +502,17 @@ export type Fornecedor = {
   active: boolean;
   created_at: string;
   updated_at: string;
+};
+
+export type AnaliseCategoria = { category: string; total: number };
+export type AnaliseMes = { month: string; pagar: number; receber: number };
+export type AnaliseFinanceira = {
+  date_from: string;
+  date_to: string;
+  receber: { total: number; by_category: AnaliseCategoria[] };
+  pagar: { total: number; by_category: AnaliseCategoria[] };
+  saldo: number;
+  by_month: AnaliseMes[];
 };
 
 export type Recorrencia = {
