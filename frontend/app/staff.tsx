@@ -131,7 +131,7 @@ export default function StaffScreen() {
           {openEmergencies > 0 ? (
             <Pressable
               testID="staff-emergency-banner"
-              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy); router.push('/admin-solicitacoes'); }}
+              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy); router.push('/admin-emergencias'); }}
               style={({ pressed }) => [styles.emgBanner, pressed && { opacity: 0.9 }]}
             >
               <Ionicons name="alert-circle" size={24} color="#FFFFFF" />

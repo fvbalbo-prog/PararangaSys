@@ -345,7 +345,7 @@ export default function AdminScreen() {
       {openEmergencies > 0 ? (
         <Pressable
           testID="admin-emergency-banner"
-          onPress={() => router.push('/admin-solicitacoes')}
+          onPress={() => router.push('/admin-emergencias')}
           style={styles.emgBanner}
         >
           <Ionicons name="alert-circle" size={20} color="#FFFFFF" />

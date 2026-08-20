@@ -324,6 +324,9 @@ export default function AdminFinanceiroScreen() {
         <Pressable onPress={() => router.push('/admin-fornecedores')} testID="financeiro-fornecedores-button" style={styles.iconBtn} hitSlop={12}>
           <Ionicons name="briefcase-outline" size={22} color={colors.onSurface} />
         </Pressable>
+        <Pressable onPress={() => router.push('/admin-relatorio')} testID="financeiro-faturamento-button" style={styles.iconBtn} hitSlop={12}>
+          <Ionicons name="receipt-outline" size={22} color={colors.onSurface} />
+        </Pressable>
         <Pressable onPress={openForm} testID="financeiro-add" style={styles.addBtn} hitSlop={12}>
           <Ionicons name="add" size={24} color="#FFFFFF" />
         </Pressable>

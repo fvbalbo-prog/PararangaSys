@@ -20,10 +20,10 @@ type NavItem = { key: string; label: string; icon: keyof typeof Ionicons.glyphMa
 const NAV: NavItem[] = [
   { key: 'inicio', label: 'Visão Geral', icon: 'grid-outline' },
   { key: 'movimentacoes', label: 'Movimentações', icon: 'list-outline', route: '/admin-status' },
-  { key: 'solicitacoes', label: 'Solicitações', icon: 'receipt-outline', route: '/admin-solicitacoes' },
+  { key: 'solicitacoes', label: 'Autorizações', icon: 'receipt-outline', route: '/admin-solicitacoes' },
+  { key: 'emergencias', label: 'Emergências', icon: 'alert-circle-outline', route: '/admin-emergencias' },
   { key: 'cadastros', label: 'Cadastros', icon: 'people-outline', route: '/admin-clientes' },
   { key: 'produtos', label: 'Conveniência', icon: 'pricetags-outline', route: '/admin-conveniencia' },
-  { key: 'faturamento', label: 'Faturamento', icon: 'bar-chart-outline', route: '/admin-relatorio' },
   { key: 'ponto', label: 'Ponto Eletrônico', icon: 'time-outline', route: '/admin-ponto' },
   { key: 'financeiro', label: 'Painel Financeiro', icon: 'wallet-outline', route: '/admin-financeiro' },
 ];
@@ -222,7 +222,7 @@ export default function AdminDesktopScreen() {
                       <Text style={styles.emptyLine}>Nenhuma emergência aberta. 🎉</Text>
                     ) : (
                       openEmg.slice(0, 6).map((e) => (
-                        <Pressable key={e.id} onPress={() => router.push('/admin-solicitacoes')} style={styles.emgRow} testID={`desktop-emg-${e.id}`}>
+                        <Pressable key={e.id} onPress={() => router.push('/admin-emergencias')} style={styles.emgRow} testID={`desktop-emg-${e.id}`}>
                           <Ionicons name={e.kind === 'reboque' ? 'boat' : 'alert-circle'} size={18} color={colors.error} />
                           <View style={{ flex: 1 }}>
                             <Text style={styles.emgName}>{e.user_name} · {e.boat_name}</Text>
