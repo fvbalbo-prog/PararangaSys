@@ -20,7 +20,7 @@ def client():
 # ---- Login ----
 class TestLogin:
     def test_login_valid_cpf(self, client):
-        r = client.post(f"{API}/login", json={"cpf": "11111111111"})
+        r = client.post(f"{API}/login", json={"cpf": "11111111111", "phone": "1111"})
         assert r.status_code == 200
         d = r.json()
         assert d["cpf"] == "11111111111"
@@ -28,12 +28,12 @@ class TestLogin:
         assert d["boat_name"] == "Netuno"
 
     def test_login_formatted_cpf(self, client):
-        r = client.post(f"{API}/login", json={"cpf": "111.111.111-11"})
+        r = client.post(f"{API}/login", json={"cpf": "111.111.111-11", "phone": "1111"})
         assert r.status_code == 200
         assert r.json()["cpf"] == "11111111111"
 
     def test_login_unregistered_cpf_returns_404(self, client):
-        r = client.post(f"{API}/login", json={"cpf": "99999999999"})
+        r = client.post(f"{API}/login", json={"cpf": "99999999999", "phone": "0000"})
         assert r.status_code == 404
 
     def test_login_invalid_cpf_returns_400(self, client):
