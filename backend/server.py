@@ -1425,6 +1425,77 @@ async def cancel_emergency(eid: str):
     return await db.emergencies.find_one({"id": eid}, {"_id": 0})
 
 
+# ===================== Serviços (lavagem, marinheiro, abastecimento) =====================
+SERVICO_TYPES = ("lavagem", "marinheiro", "abastecimento")
+SERVICO_LABELS = {
+    "lavagem": "Lavagem de Lancha",
+    "marinheiro": "Marinheiro",
+    "abastecimento": "Abastecimento de Combustível",
+}
+
+
+class ServicoInput(BaseModel):
+    cpf: str
+    boat_name: Optional[str] = None
+    type: Literal["lavagem", "marinheiro", "abastecimento"]
+    desired_date: Optional[str] = None  # YYYY-MM-DD
+    desired_time: Optional[str] = None  # HH:MM
+    observation: Optional[str] = None
+
+
+@api_router.post("/servicos")
+async def create_servico(payload: ServicoInput):
+    cpf = normalize_cpf(payload.cpf)
+    user = await db.users.find_one({"cpf": cpf}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="CPF não cadastrado.")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "cpf": cpf,
+        "user_name": user["name"],
+        "boat_name": payload.boat_name or user.get("boat_name"),
+        "type": payload.type,
+        "desired_date": payload.desired_date,
+        "desired_time": payload.desired_time,
+        "observation": (payload.observation or "").strip() or None,
+        "status": "pendente",
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+    await db.servicos.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/servicos")
+async def list_servicos(cpf: Optional[str] = None, status: Optional[str] = None):
+    query: dict = {}
+    if cpf:
+        query["cpf"] = normalize_cpf(cpf)
+    if status:
+        query["status"] = status
+    return await db.servicos.find(query, {"_id": 0}).sort("created_at", -1).to_list(2000)
+
+
+@api_router.patch("/servicos/{sid}/status", dependencies=[Depends(require_staff)])
+async def set_servico_status(sid: str, status: Literal["pendente", "em_andamento", "concluido", "cancelado"]):
+    now_iso = datetime.now(timezone.utc).isoformat()
+    res = await db.servicos.update_one({"id": sid}, {"$set": {"status": status, "updated_at": now_iso}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Solicitação não encontrada.")
+    return await db.servicos.find_one({"id": sid}, {"_id": 0})
+
+
+@api_router.patch("/servicos/{sid}/cancel")
+async def cancel_servico(sid: str):
+    now_iso = datetime.now(timezone.utc).isoformat()
+    res = await db.servicos.update_one({"id": sid}, {"$set": {"status": "cancelado", "updated_at": now_iso}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Solicitação não encontrada.")
+    return await db.servicos.find_one({"id": sid}, {"_id": 0})
+
+
 # ===================== Relatório de consumo (cobrança mensal) =====================
 @api_router.get("/reports/consumo", dependencies=[Depends(require_admin)])
 async def consumo_report(month: Optional[str] = None, cpf: Optional[str] = None):

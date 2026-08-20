@@ -204,6 +204,19 @@ export const api = {
     req<Emergency>(`/emergencies/${id}/resolve`, { method: 'PATCH' }),
   cancelEmergency: (id: string) =>
     req<Emergency>(`/emergencies/${id}/cancel`, { method: 'PATCH' }),
+  // Serviços (lavagem, marinheiro, abastecimento)
+  createServico: (data: { cpf: string; boat_name?: string | null; type: ServicoType; desired_date?: string | null; desired_time?: string | null; observation?: string | null }) =>
+    req<Servico>('/servicos', { method: 'POST', body: JSON.stringify(data) }),
+  listServicos: (params?: { cpf?: string; status?: ServicoStatus }) => {
+    const qs = new URLSearchParams();
+    if (params?.cpf) qs.set('cpf', params.cpf);
+    if (params?.status) qs.set('status', params.status);
+    const s = qs.toString();
+    return req<Servico[]>(`/servicos${s ? `?${s}` : ''}`);
+  },
+  setServicoStatus: (id: string, status: ServicoStatus) =>
+    req<Servico>(`/servicos/${id}/status?status=${status}`, { method: 'PATCH' }),
+  cancelServico: (id: string) => req<Servico>(`/servicos/${id}/cancel`, { method: 'PATCH' }),
   consumoReport: (month?: string, cpf?: string) => {
     const qs = new URLSearchParams();
     if (month) qs.set('month', month);
@@ -373,6 +386,29 @@ export function authValidityLabel(a: Authorization): string {
   if (vtype === 'periodo') return `${br(a.start_date)} até ${br(a.end_date)}`;
   return br(a.date);
 }
+export type ServicoType = 'lavagem' | 'marinheiro' | 'abastecimento';
+export type ServicoStatus = 'pendente' | 'em_andamento' | 'concluido' | 'cancelado';
+
+export const SERVICO_LABELS: Record<ServicoType, string> = {
+  lavagem: 'Lavagem de Lancha',
+  marinheiro: 'Marinheiro',
+  abastecimento: 'Abastecimento de Combustível',
+};
+
+export type Servico = {
+  id: string;
+  cpf: string;
+  user_name: string;
+  boat_name?: string | null;
+  type: ServicoType;
+  desired_date?: string | null;
+  desired_time?: string | null;
+  observation?: string | null;
+  status: ServicoStatus;
+  created_at: string;
+  updated_at: string;
+};
+
 export type Emergency = {
   id: string;
   kind?: 'socorro' | 'reboque';

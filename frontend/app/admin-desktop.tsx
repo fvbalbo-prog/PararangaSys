@@ -24,6 +24,7 @@ const NAV: NavItem[] = [
   { key: 'emergencias', label: 'Emergências', icon: 'alert-circle-outline', route: '/admin-emergencias' },
   { key: 'cadastros', label: 'Cadastros', icon: 'people-outline', route: '/admin-clientes' },
   { key: 'produtos', label: 'Conveniência', icon: 'pricetags-outline', route: '/admin-conveniencia' },
+  { key: 'servicos', label: 'Serviços', icon: 'construct-outline', route: '/admin-servicos' },
   { key: 'ponto', label: 'Ponto Eletrônico', icon: 'time-outline', route: '/admin-ponto' },
   { key: 'financeiro', label: 'Painel Financeiro', icon: 'wallet-outline', route: '/admin-financeiro' },
 ];

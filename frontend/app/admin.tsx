@@ -260,9 +260,8 @@ export default function AdminScreen() {
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
       <View style={styles.header}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.title} testID="admin-title">Painel</Text>
-        </View>
+        <Text style={styles.title} testID="admin-title">Painel</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.headerIconsScroll} contentContainerStyle={styles.headerIconsRow}>
         <Pressable
           onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-dashboard'); }}
           hitSlop={12}
@@ -317,6 +316,14 @@ export default function AdminScreen() {
           <Ionicons name="pricetags-outline" size={22} color={colors.onBrandPrimary} />
         </Pressable>
         <Pressable
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-servicos'); }}
+          hitSlop={12}
+          testID="admin-servicos-button"
+          style={[styles.logoutBtn, { marginLeft: spacing.sm }]}
+        >
+          <Ionicons name="construct-outline" size={22} color={colors.onBrandPrimary} />
+        </Pressable>
+        <Pressable
           onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-ponto'); }}
           hitSlop={12}
           testID="admin-ponto-button"
@@ -343,6 +350,7 @@ export default function AdminScreen() {
         <Pressable onPress={handleLogout} hitSlop={12} testID="admin-logout" style={[styles.logoutBtn, { marginLeft: spacing.sm }]}>
           <Ionicons name="log-out-outline" size={22} color={colors.onBrandPrimary} />
         </Pressable>
+        </ScrollView>
       </View>
 
       {openEmergencies > 0 ? (
@@ -649,7 +657,9 @@ const styles = StyleSheet.create({
     paddingTop: spacing.md,
   },
   kicker: { color: colors.brandSecondary, letterSpacing: 3, fontSize: 11, fontWeight: '700' },
-  title: { color: colors.onBrandPrimary, fontSize: 26, fontWeight: '800', marginTop: 4 },
+  title: { color: colors.onBrandPrimary, fontSize: 26, fontWeight: '800', marginTop: 4, marginRight: spacing.md },
+  headerIconsScroll: { flex: 1 },
+  headerIconsRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingRight: spacing.xs },
   logoutBtn: { padding: spacing.sm, borderRadius: radius.pill, backgroundColor: 'rgba(255,255,255,0.08)' },
   alertBanner: {
     flexDirection: 'row',
