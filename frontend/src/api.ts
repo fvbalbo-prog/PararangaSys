@@ -8,6 +8,7 @@ export type Boat = {
   length?: number | null;
   monthly_fee?: number | null;
   monthly_fee_valid_until?: string | null; // YYYY-MM-DD
+  mensalidade_due_day?: number | null; // dia do mês (1-31) de vencimento da mensalidade
 };
 
 export function boatName(b: Boat | string): string {
@@ -123,9 +124,9 @@ export const api = {
     req<Client>('/users', { method: 'POST', body: JSON.stringify(data) }),
   setUserActive: (cpf: string, active: boolean) =>
     req<Client>(`/users/${cpf}/active`, { method: 'PATCH', body: JSON.stringify({ active }) }),
-  addBoat: (cpf: string, boat: { name: string; draft?: number | null; length?: number | null; monthly_fee?: number | null; monthly_fee_valid_until?: string | null }) =>
+  addBoat: (cpf: string, boat: { name: string; draft?: number | null; length?: number | null; monthly_fee?: number | null; monthly_fee_valid_until?: string | null; mensalidade_due_day?: number | null }) =>
     req<Client>(`/users/${cpf}/boats`, { method: 'POST', body: JSON.stringify(boat) }),
-  updateBoat: (cpf: string, name: string, data: Partial<{ draft: number | null; length: number | null; monthly_fee: number | null; monthly_fee_valid_until: string | null }>) =>
+  updateBoat: (cpf: string, name: string, data: Partial<{ draft: number | null; length: number | null; monthly_fee: number | null; monthly_fee_valid_until: string | null; mensalidade_due_day: number | null }>) =>
     req<Client>(`/users/${cpf}/boats/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(data) }),
   removeBoat: (cpf: string, boat: string) =>
     req<Client>(`/users/${cpf}/boats?boat=${encodeURIComponent(boat)}`, { method: 'DELETE' }),
@@ -228,6 +229,14 @@ export const api = {
     req<Statement>('/statements/send', { method: 'POST', body: JSON.stringify({ cpf, month }) }),
   listStatements: (cpf?: string) => req<Statement[]>(`/statements${cpf ? `?cpf=${cpf}` : ''}`),
   readStatement: (id: string) => req<{ ok: boolean }>(`/statements/${id}/read`, { method: 'PATCH' }),
+  // Fatura mensal (mensalidade + consumo, fechada na data de pagamento da lancha)
+  faturaPreview: (cpf: string, boatName?: string) => {
+    const qs = new URLSearchParams({ cpf });
+    if (boatName) qs.set('boat_name', boatName);
+    return req<FaturaPreviewResponse>(`/fatura/preview?${qs.toString()}`);
+  },
+  listFaturas: (cpf?: string) => req<Fatura[]>(`/faturas${cpf ? `?cpf=${cpf}` : ''}`),
+  readFatura: (id: string) => req<{ ok: boolean }>(`/faturas/${id}/read`, { method: 'PATCH' }),
   // Ponto Eletrônico
   baterPonto: (type: PontoType) =>
     req<PontoEntry>('/ponto', { method: 'POST', body: JSON.stringify({ type }) }),
@@ -465,6 +474,33 @@ export type Statement = {
   total: number;
   orders: { id: string; total: number; created_at: string; items: { name: string; qty: number }[] }[];
   reboques: { id: string; amount: number; boat_name?: string | null }[];
+  read: boolean;
+  sent_at: string;
+};
+
+export type FaturaOrder = { id: string; total: number; created_at: string; items: { name: string; qty: number }[] };
+export type FaturaReboque = { id: string; amount: number; billed_at?: string | null };
+
+export type FaturaBase = {
+  boat_name: string;
+  period_start: string; // YYYY-MM-DD
+  period_end: string; // YYYY-MM-DD
+  due_date: string; // YYYY-MM-DD
+  mensalidade: number;
+  convenience_total: number;
+  reboque_total: number;
+  total: number;
+  orders: FaturaOrder[];
+  reboques: FaturaReboque[];
+};
+
+export type FaturaPreview = FaturaBase & { send_date: string };
+export type FaturaPreviewResponse = { cpf: string; user_name: string; faturas: FaturaPreview[] };
+
+export type Fatura = FaturaBase & {
+  id: string;
+  cpf: string;
+  user_name: string;
   read: boolean;
   sent_at: string;
 };

@@ -55,6 +55,7 @@ export default function AdminCadClientesScreen() {
   const [boatLength, setBoatLength] = useState('');
   const [boatFee, setBoatFee] = useState('');
   const [boatFeeValidUntil, setBoatFeeValidUntil] = useState<Date | null>(null);
+  const [boatDueDay, setBoatDueDay] = useState('');
 
   const [saving, setSaving] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
@@ -123,7 +124,7 @@ export default function AdminCadClientesScreen() {
 
   const openBoatModal = (cpf: string) => {
     setBoatModalCpf(cpf); setBoatEditName(null);
-    setBoatName(''); setBoatDraft(''); setBoatLength(''); setBoatFee(''); setBoatFeeValidUntil(null);
+    setBoatName(''); setBoatDraft(''); setBoatLength(''); setBoatFee(''); setBoatFeeValidUntil(null); setBoatDueDay('');
     setModalError(null);
   };
 
@@ -135,6 +136,7 @@ export default function AdminCadClientesScreen() {
     setBoatLength(boat.length != null ? String(boat.length) : '');
     setBoatFee(boat.monthly_fee != null ? String(boat.monthly_fee) : '');
     setBoatFeeValidUntil(boat.monthly_fee_valid_until ? new Date(`${boat.monthly_fee_valid_until}T00:00:00`) : null);
+    setBoatDueDay(boat.mensalidade_due_day != null ? String(boat.mensalidade_due_day) : '');
     setModalError(null);
   };
 
@@ -145,11 +147,17 @@ export default function AdminCadClientesScreen() {
     const length = boatLength ? parseFloat(boatLength.replace(',', '.')) : null;
     const monthly_fee = boatFee ? parseFloat(boatFee.replace(',', '.')) : null;
     const monthly_fee_valid_until = boatFeeValidUntil ? dateToISO(boatFeeValidUntil) : null;
+    const dueDayNum = boatDueDay ? parseInt(boatDueDay, 10) : null;
+    if (dueDayNum != null && (Number.isNaN(dueDayNum) || dueDayNum < 1 || dueDayNum > 31)) {
+      setModalError('Dia de vencimento da mensalidade deve ser entre 1 e 31.');
+      return;
+    }
+    const mensalidade_due_day = dueDayNum;
     try {
       setSaving(true);
       const updated = boatEditName
-        ? await api.updateBoat(boatModalCpf, boatEditName, { draft, length, monthly_fee, monthly_fee_valid_until })
-        : await api.addBoat(boatModalCpf, { name: boatName.trim(), draft, length, monthly_fee, monthly_fee_valid_until });
+        ? await api.updateBoat(boatModalCpf, boatEditName, { draft, length, monthly_fee, monthly_fee_valid_until, mensalidade_due_day })
+        : await api.addBoat(boatModalCpf, { name: boatName.trim(), draft, length, monthly_fee, monthly_fee_valid_until, mensalidade_due_day });
       setClients((prev) => prev.map((c) => (c.cpf === updated.cpf ? updated : c)));
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setBoatModalCpf(null);
@@ -241,6 +249,9 @@ export default function AdminCadClientesScreen() {
                           {b.monthly_fee != null ? (
                             <Text style={styles.boatSpec}>Mensalidade: {formatMoney(b.monthly_fee)}{b.monthly_fee_valid_until ? ` • válida até ${brDate(b.monthly_fee_valid_until)}` : ''}</Text>
                           ) : null}
+                          {b.mensalidade_due_day != null ? (
+                            <Text style={styles.boatSpec}>Vencimento mensal: dia {b.mensalidade_due_day}</Text>
+                          ) : null}
                           {expiring ? (
                             <View style={styles.expiringTag} testID={`boat-expiring-${item.cpf}-${b.name}`}>
                               <Ionicons name="alert-circle" size={12} color={colors.error} />
@@ -321,6 +332,8 @@ export default function AdminCadClientesScreen() {
               <View style={{ marginTop: spacing.sm }}>
                 <DateField testID="boat-fee-valid-until" label="Validade do valor da mensalidade" mode="date" value={boatFeeValidUntil} onChange={setBoatFeeValidUntil} />
               </View>
+              <Text style={styles.fieldLabel}>Dia de vencimento da mensalidade (1-31)</Text>
+              <TextInput testID="boat-due-day-input" style={styles.input} value={boatDueDay} onChangeText={setBoatDueDay} placeholder="Ex.: 10" placeholderTextColor={colors.onSurfaceTertiary} keyboardType="number-pad" inputMode="numeric" maxLength={2} />
               {modalError ? <Text style={styles.modalError}>{modalError}</Text> : null}
             </ScrollView>
             <View style={styles.modalActions}>

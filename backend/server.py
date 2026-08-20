@@ -194,6 +194,7 @@ class Boat(BaseModel):
     length: Optional[float] = None  # comprimento em pés
     monthly_fee: Optional[float] = None            # valor da mensalidade (R$)
     monthly_fee_valid_until: Optional[str] = None  # validade do valor, YYYY-MM-DD
+    mensalidade_due_day: Optional[int] = None      # dia do mês (1-31) de vencimento da mensalidade
 
 
 class User(BaseModel):
@@ -772,6 +773,7 @@ class BoatInput(BaseModel):
     length: Optional[float] = None
     monthly_fee: Optional[float] = None
     monthly_fee_valid_until: Optional[str] = None
+    mensalidade_due_day: Optional[int] = None
 
 
 class BoatUpdate(BaseModel):
@@ -779,6 +781,7 @@ class BoatUpdate(BaseModel):
     length: Optional[float] = None
     monthly_fee: Optional[float] = None
     monthly_fee_valid_until: Optional[str] = None
+    mensalidade_due_day: Optional[int] = None
 
 
 def _boat_name(b) -> str:
@@ -854,6 +857,7 @@ async def add_boat(cpf: str, payload: BoatInput):
         "length": payload.length,
         "monthly_fee": payload.monthly_fee,
         "monthly_fee_valid_until": payload.monthly_fee_valid_until,
+        "mensalidade_due_day": payload.mensalidade_due_day,
     })
     update = {"boats": boats}
     if not user.get("boat_name"):
@@ -1605,6 +1609,162 @@ async def list_statements(cpf: Optional[str] = None):
 @api_router.patch("/statements/{sid}/read")
 async def read_statement(sid: str):
     await db.statements.update_one({"id": sid}, {"$set": {"read": True}})
+    return {"ok": True}
+
+
+# ===================== Fatura mensal (mensalidade + consumo, PDF) =====================
+def _is_business_day(d: date_cls) -> bool:
+    return d.weekday() < 5  # 0=segunda .. 4=sexta
+
+
+def _due_date_for_month(due_day: int, year: int, month: int) -> date_cls:
+    day = min(max(due_day, 1), _days_in_month(year, month))
+    return date_cls(year, month, day)
+
+
+def _fatura_send_date(due_date: date_cls) -> date_cls:
+    """Envio sempre 2 dias antes do vencimento, adiantado para o dia útil
+    anterior caso caia em fim de semana."""
+    send = due_date - timedelta(days=2)
+    while not _is_business_day(send):
+        send -= timedelta(days=1)
+    return send
+
+
+def _current_fatura_due_date(due_day: int, today: date_cls) -> date_cls:
+    """Vencimento do ciclo de fatura corrente, ancorado no dia de pagamento
+    da mensalidade da lancha. Avança pro mês seguinte assim que o
+    vencimento do mês atual passa."""
+    candidate = _due_date_for_month(due_day, today.year, today.month)
+    if today > candidate:
+        nxt_month = today.month + 1
+        nxt_year = today.year
+        if nxt_month > 12:
+            nxt_month = 1
+            nxt_year += 1
+        candidate = _due_date_for_month(due_day, nxt_year, nxt_month)
+    return candidate
+
+
+async def _build_fatura(cpf: str, boat: dict, due_date: date_cls) -> dict:
+    """Fecha as despesas do cliente (conveniência + reboques) na mesma janela
+    do ciclo de pagamento da mensalidade da lancha, e soma o valor da
+    mensalidade junto com as demais despesas."""
+    period_end = due_date
+    period_start = period_end - timedelta(days=29)
+    start_iso = period_start.isoformat()
+    end_iso = period_end.isoformat()
+
+    order_q = {
+        "cpf": cpf,
+        "status": {"$ne": "cancelada"},
+        "created_at": {"$gte": start_iso, "$lt": f"{end_iso}T23:59:59.999999"},
+    }
+    reboque_q = {
+        "cpf": cpf,
+        "boat_name": boat.get("name"),
+        "kind": "reboque",
+        "billed_amount": {"$ne": None},
+        "billed_at": {"$gte": start_iso, "$lt": f"{end_iso}T23:59:59.999999"},
+    }
+    orders = await db.convenience_orders.find(order_q, {"_id": 0}).to_list(2000)
+    reboques = await db.emergencies.find(reboque_q, {"_id": 0}).to_list(2000)
+
+    convenience_total = round(sum(o.get("total", 0) for o in orders), 2)
+    reboque_total = round(sum((r.get("billed_amount") or 0) for r in reboques), 2)
+    mensalidade = round(boat.get("monthly_fee") or 0, 2)
+    total = round(mensalidade + convenience_total + reboque_total, 2)
+
+    return {
+        "boat_name": boat.get("name"),
+        "period_start": start_iso,
+        "period_end": end_iso,
+        "due_date": due_date.isoformat(),
+        "mensalidade": mensalidade,
+        "convenience_total": convenience_total,
+        "reboque_total": reboque_total,
+        "total": total,
+        "orders": [
+            {"id": o["id"], "total": o.get("total", 0), "created_at": o.get("created_at"), "items": o.get("items", [])}
+            for o in orders
+        ],
+        "reboques": [
+            {"id": r["id"], "amount": r.get("billed_amount") or 0, "billed_at": r.get("billed_at")}
+            for r in reboques
+        ],
+    }
+
+
+@api_router.get("/fatura/preview")
+async def fatura_preview(cpf: str, boat_name: Optional[str] = None):
+    """Prévia da(s) fatura(s) do ciclo corrente do cliente, sem persistir
+    nem contar como envio — usada pela tela Minha Fatura."""
+    cpf_clean = normalize_cpf(cpf)
+    user = await db.users.find_one({"cpf": cpf_clean}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+    boats = [b for b in user.get("boats", []) if isinstance(b, dict)]
+    if boat_name:
+        boats = [b for b in boats if b.get("name") == boat_name]
+    today = now_br().date()
+    results = []
+    for b in boats:
+        if not b.get("monthly_fee") or not b.get("mensalidade_due_day"):
+            continue
+        due_date = _current_fatura_due_date(int(b["mensalidade_due_day"]), today)
+        send_date = _fatura_send_date(due_date)
+        fatura = await _build_fatura(cpf_clean, b, due_date)
+        fatura["send_date"] = send_date.isoformat()
+        results.append(fatura)
+    return {"cpf": cpf_clean, "user_name": user["name"], "faturas": results}
+
+
+async def _maybe_send_faturas(cpf: str, user_name: str, boats: list):
+    today = now_br().date()
+    for b in boats:
+        if not isinstance(b, dict) or not b.get("monthly_fee") or not b.get("mensalidade_due_day"):
+            continue
+        due_date = _current_fatura_due_date(int(b["mensalidade_due_day"]), today)
+        send_date = _fatura_send_date(due_date)
+        if today < send_date:
+            continue
+        exists = await db.faturas.find_one(
+            {"cpf": cpf, "boat_name": b.get("name"), "due_date": due_date.isoformat()}
+        )
+        if exists:
+            continue
+        fatura = await _build_fatura(cpf, b, due_date)
+        fatura["id"] = str(uuid.uuid4())
+        fatura["cpf"] = cpf
+        fatura["user_name"] = user_name
+        fatura["read"] = False
+        fatura["sent_at"] = datetime.now(timezone.utc).isoformat()
+        await db.faturas.insert_one(dict(fatura))
+        await create_notification(
+            cpf,
+            "Fatura disponível",
+            f"Sua fatura da lancha {b.get('name')} (venc. {due_date.strftime('%d/%m/%Y')}) já está disponível.",
+            kind="fatura",
+        )
+
+
+@api_router.get("/faturas")
+async def list_faturas(cpf: Optional[str] = None):
+    if cpf:
+        cpf_clean = normalize_cpf(cpf)
+        user = await db.users.find_one({"cpf": cpf_clean}, {"_id": 0})
+        if user:
+            await _maybe_send_faturas(cpf_clean, user["name"], user.get("boats") or [])
+        query = {"cpf": cpf_clean}
+    else:
+        query = {}
+    docs = await db.faturas.find(query, {"_id": 0}).sort("sent_at", -1).to_list(500)
+    return docs
+
+
+@api_router.patch("/faturas/{fid}/read")
+async def read_fatura(fid: str):
+    await db.faturas.update_one({"id": fid}, {"$set": {"read": True}})
     return {"ok": True}
 
 
