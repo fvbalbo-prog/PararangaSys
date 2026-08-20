@@ -1472,6 +1472,12 @@ async def read_statement(sid: str):
 
 # ===================== Ponto Eletrônico =====================
 PONTO_TYPES = ("entrada", "saida_almoco", "retorno_almoco", "saida_final")
+PONTO_TYPE_LABELS = {
+    "entrada": "Entrada",
+    "saida_almoco": "Saída Almoço",
+    "retorno_almoco": "Retorno Almoço",
+    "saida_final": "Saída Final",
+}
 PONTO_MIN = time(7, 0)
 PONTO_MAX = time(19, 30)
 
@@ -1496,6 +1502,13 @@ async def bater_ponto(payload: PontoInput, claims: dict = Depends(require_staff)
         raise HTTPException(
             status_code=400,
             detail=f"Ponto só pode ser registrado entre {PONTO_MIN.strftime('%H:%M')} e {PONTO_MAX.strftime('%H:%M')}.",
+        )
+    today_str = now.strftime("%Y-%m-%d")
+    existing = await db.time_entries.find_one({"cpf": cpf, "date": today_str, "type": payload.type})
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{PONTO_TYPE_LABELS[payload.type]} já registrada hoje, às {existing['time']}.",
         )
     now_iso = datetime.now(timezone.utc).isoformat()
     doc = {

@@ -111,15 +111,16 @@ export default function PontoScreen() {
       <View style={styles.grid}>
         {PONTO_ORDER.map((p) => {
           const punched = punchedTypes.has(p.type);
+          const disabled = bating !== null || !withinWindow || punched;
           return (
             <Pressable
               key={p.type}
               testID={`ponto-btn-${p.type}`}
-              disabled={bating !== null || !withinWindow}
+              disabled={disabled}
               onPress={() => bater(p.type)}
-              style={({ pressed }) => [styles.card, pressed && { opacity: 0.85 }, !withinWindow && styles.cardDisabled]}
+              style={({ pressed }) => [styles.card, pressed && { opacity: 0.85 }, (!withinWindow || punched) && styles.cardDisabled]}
             >
-              <View style={[styles.cardIcon, { backgroundColor: p.color }, !withinWindow && styles.cardIconDisabled]}>
+              <View style={[styles.cardIcon, { backgroundColor: p.color }, (!withinWindow || punched) && styles.cardIconDisabled]}>
                 {bating === p.type ? (
                   <ActivityIndicator color="#FFFFFF" size="small" />
                 ) : (
