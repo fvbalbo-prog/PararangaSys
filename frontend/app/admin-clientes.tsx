@@ -30,13 +30,11 @@ export default function CadastrosScreen() {
   const active = clients.filter((c) => (c as any).active !== false);
   const numClientes = active.filter((c) => !c.is_staff).length;
   const numFuncionarios = active.filter((c) => c.is_staff).length;
-  const numLanchas = clients.filter((c) => !c.is_staff).reduce((s, c) => s + (c.boats?.length || 0), 0);
 
   const go = (path: string) => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push(path); };
 
   const MENU: { key: string; title: string; subtitle: string; icon: keyof typeof Ionicons.glyphMap; color: string; route: string; count: number }[] = [
-    { key: 'clientes', title: 'Clientes', subtitle: 'Cadastrar e gerenciar clientes', icon: 'people', color: colors.brandPrimary, route: '/admin-cad-clientes', count: numClientes },
-    { key: 'lanchas', title: 'Lanchas', subtitle: 'Embarcações de cada cliente', icon: 'boat', color: '#0E7490', route: '/admin-cad-lanchas', count: numLanchas },
+    { key: 'clientes', title: 'Clientes', subtitle: 'Clientes e suas lanchas', icon: 'people', color: colors.brandPrimary, route: '/admin-cad-clientes', count: numClientes },
     { key: 'funcionarios', title: 'Funcionários', subtitle: 'Equipe com acesso ao painel', icon: 'briefcase', color: '#4D7C0F', route: '/admin-cad-funcionarios', count: numFuncionarios },
   ];
 
@@ -48,7 +46,7 @@ export default function CadastrosScreen() {
         </Pressable>
         <View style={{ flex: 1 }}>
           <Text style={styles.title} testID="cadastros-title">Cadastros</Text>
-          <Text style={styles.subtitle}>Clientes, lanchas e funcionários</Text>
+          <Text style={styles.subtitle}>Clientes e funcionários</Text>
         </View>
       </View>
 

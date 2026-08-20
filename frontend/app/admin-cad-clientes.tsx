@@ -30,6 +30,12 @@ export default function AdminCadClientesScreen() {
   const [cCpf, setCCpf] = useState('');
   const [cName, setCName] = useState('');
   const [cPhone, setCPhone] = useState('');
+
+  const [boatModalCpf, setBoatModalCpf] = useState<string | null>(null);
+  const [boatName, setBoatName] = useState('');
+  const [boatDraft, setBoatDraft] = useState('');
+  const [boatLength, setBoatLength] = useState('');
+
   const [saving, setSaving] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
   const [dialog, setDialog] = useState<{ title: string; message?: string; buttons: DialogButton[] } | null>(null);
@@ -95,6 +101,49 @@ export default function AdminCadClientesScreen() {
     }
   };
 
+  const openBoatModal = (cpf: string) => {
+    setBoatModalCpf(cpf); setBoatName(''); setBoatDraft(''); setBoatLength(''); setModalError(null);
+  };
+
+  const submitBoat = async () => {
+    if (!boatModalCpf) return;
+    if (!boatName.trim()) { setModalError('Informe o nome da lancha.'); return; }
+    try {
+      setSaving(true);
+      const updated = await api.addBoat(boatModalCpf, {
+        name: boatName.trim(),
+        draft: boatDraft ? parseFloat(boatDraft.replace(',', '.')) : null,
+        length: boatLength ? parseFloat(boatLength.replace(',', '.')) : null,
+      });
+      setClients((prev) => prev.map((c) => (c.cpf === updated.cpf ? updated : c)));
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setBoatModalCpf(null);
+    } catch (e: any) {
+      setModalError(e.message || 'Erro ao salvar.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const removeBoat = (cpf: string, name: string) => {
+    setDialog({
+      title: 'Remover lancha',
+      message: `Remover a lancha "${name}"?`,
+      buttons: [
+        { label: 'Cancelar', variant: 'cancel', onPress: closeDialog },
+        {
+          label: 'Remover', variant: 'destructive', testID: `confirm-remove-boat-${cpf}-${name}`,
+          onPress: async () => {
+            closeDialog();
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+            setClients((prev) => prev.map((c) => (c.cpf === cpf ? { ...c, boats: c.boats.filter((b) => b.name !== name) } : c)));
+            try { await api.removeBoat(cpf, name); } catch { load(); }
+          },
+        },
+      ],
+    });
+  };
+
   return (
     <SafeAreaView style={styles.root} edges={['top']} testID="cad-clientes-screen">
       <View style={styles.header}>
@@ -130,7 +179,6 @@ export default function AdminCadClientesScreen() {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.clientName}>{item.name}</Text>
                   <Text style={styles.clientMeta}>{formatCpf(item.cpf)} • {item.phone}</Text>
-                  <Text style={styles.clientMeta}>{item.boats?.length || 0} lancha(s)</Text>
                 </View>
                 {item.active === false ? (
                   <View style={[styles.badge, { backgroundColor: colors.error }]}>
@@ -139,6 +187,33 @@ export default function AdminCadClientesScreen() {
                   </View>
                 ) : null}
               </View>
+
+              <View style={styles.boatsSection}>
+                <Text style={styles.boatsSectionLabel}>Lanchas</Text>
+                {item.boats.length === 0 ? (
+                  <Text style={styles.noBoats}>Nenhuma lancha cadastrada.</Text>
+                ) : (
+                  item.boats.map((b) => (
+                    <View key={b.name} style={styles.boatRow} testID={`boat-${item.cpf}-${b.name}`}>
+                      <Ionicons name="boat" size={18} color={colors.brandPrimary} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.boatName}>{b.name}</Text>
+                        <Text style={styles.boatSpec}>
+                          Calado: {b.draft != null ? `${b.draft} m` : '—'} • Comprimento: {b.length != null ? `${b.length} pés` : '—'}
+                        </Text>
+                      </View>
+                      <Pressable testID={`remove-boat-${item.cpf}-${b.name}`} hitSlop={8} onPress={() => removeBoat(item.cpf, b.name)} style={styles.trashBtn}>
+                        <Ionicons name="trash-outline" size={18} color={colors.error} />
+                      </Pressable>
+                    </View>
+                  ))
+                )}
+                <Pressable testID={`add-boat-${item.cpf}`} onPress={() => openBoatModal(item.cpf)} style={({ pressed }) => [styles.addBoatBtn, pressed && { opacity: 0.85 }]}>
+                  <Ionicons name="add-circle-outline" size={18} color={colors.brandPrimary} />
+                  <Text style={styles.addBoatText}>Adicionar lancha</Text>
+                </Pressable>
+              </View>
+
               <Pressable
                 testID={`toggle-active-${item.cpf}`}
                 onPress={() => toggleActive(item)}
@@ -180,6 +255,32 @@ export default function AdminCadClientesScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
+      <Modal visible={!!boatModalCpf} transparent animationType="slide" onRequestClose={() => setBoatModalCpf(null)}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalRoot}>
+          <Pressable style={styles.modalBackdrop} onPress={() => setBoatModalCpf(null)} />
+          <View style={styles.modalSheet}>
+            <Text style={styles.modalTitle}>Nova lancha</Text>
+            <ScrollView keyboardShouldPersistTaps="handled">
+              <Text style={styles.fieldLabel}>Nome da lancha</Text>
+              <TextInput testID="boat-name-input" style={styles.input} value={boatName} onChangeText={setBoatName} placeholder="Ex.: Netuno" placeholderTextColor={colors.onSurfaceTertiary} />
+              <Text style={styles.fieldLabel}>Calado (metros)</Text>
+              <TextInput testID="boat-draft-input" style={styles.input} value={boatDraft} onChangeText={setBoatDraft} placeholder="Ex.: 0.8" placeholderTextColor={colors.onSurfaceTertiary} keyboardType="decimal-pad" inputMode="decimal" />
+              <Text style={styles.fieldLabel}>Comprimento (pés)</Text>
+              <TextInput testID="boat-length-input" style={styles.input} value={boatLength} onChangeText={setBoatLength} placeholder="Ex.: 24" placeholderTextColor={colors.onSurfaceTertiary} keyboardType="decimal-pad" inputMode="decimal" />
+              {modalError ? <Text style={styles.modalError}>{modalError}</Text> : null}
+            </ScrollView>
+            <View style={styles.modalActions}>
+              <Pressable style={[styles.modalBtn, styles.modalCancel]} onPress={() => setBoatModalCpf(null)}>
+                <Text style={styles.modalCancelText}>Cancelar</Text>
+              </Pressable>
+              <Pressable testID="save-boat-button" style={[styles.modalBtn, styles.modalSave]} onPress={submitBoat} disabled={saving}>
+                {saving ? <ActivityIndicator color={colors.onBrandPrimary} /> : <Text style={styles.modalSaveText}>Salvar</Text>}
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
       <AppDialog visible={!!dialog} title={dialog?.title || ''} message={dialog?.message} buttons={dialog?.buttons || []} onRequestClose={closeDialog} testID="clientes-dialog" />
     </SafeAreaView>
   );
@@ -204,7 +305,15 @@ const styles = StyleSheet.create({
   clientMeta: { color: colors.onSurfaceSecondary, fontSize: typography.sm, marginTop: 2 },
   badge: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: 4 },
   badgeText: { color: '#FFFFFF', fontSize: typography.sm, fontWeight: '700' },
-  noBoats: { color: colors.onSurfaceTertiary, fontSize: typography.base, fontStyle: 'italic', textAlign: 'center', marginTop: spacing.xl },
+  boatsSection: { marginTop: spacing.md, paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: colors.border },
+  boatsSectionLabel: { color: colors.onSurfaceSecondary, fontSize: typography.sm, fontWeight: '700', marginBottom: spacing.sm, textTransform: 'uppercase', letterSpacing: 0.5 },
+  noBoats: { color: colors.onSurfaceTertiary, fontSize: typography.base, fontStyle: 'italic', marginBottom: spacing.sm },
+  boatRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: colors.surface, borderRadius: radius.sm, padding: spacing.md, marginBottom: spacing.sm, borderWidth: 1, borderColor: colors.border },
+  boatName: { color: colors.onSurface, fontSize: typography.base, fontWeight: '700' },
+  boatSpec: { color: colors.onSurfaceSecondary, fontSize: typography.sm, marginTop: 2 },
+  trashBtn: { padding: spacing.xs },
+  addBoatBtn: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.sm, marginTop: spacing.xs },
+  addBoatText: { color: colors.brandPrimary, fontSize: typography.base, fontWeight: '700' },
   accessBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs, marginTop: spacing.md, paddingVertical: spacing.md, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border },
   accessText: { fontSize: typography.base, fontWeight: '700' },
   modalRoot: { flex: 1, justifyContent: 'flex-end' },
