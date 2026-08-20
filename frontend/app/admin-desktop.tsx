@@ -22,7 +22,7 @@ const NAV: NavItem[] = [
   { key: 'movimentacoes', label: 'Movimentações', icon: 'list-outline', route: '/admin-status' },
   { key: 'solicitacoes', label: 'Solicitações', icon: 'receipt-outline', route: '/admin-solicitacoes' },
   { key: 'cadastros', label: 'Cadastros', icon: 'people-outline', route: '/admin-clientes' },
-  { key: 'produtos', label: 'Conveniência', icon: 'pricetags-outline', route: '/admin-produtos' },
+  { key: 'produtos', label: 'Conveniência', icon: 'pricetags-outline', route: '/admin-conveniencia' },
   { key: 'faturamento', label: 'Faturamento', icon: 'bar-chart-outline', route: '/admin-relatorio' },
   { key: 'ponto', label: 'Ponto Eletrônico', icon: 'time-outline', route: '/admin-ponto' },
   { key: 'financeiro', label: 'Painel Financeiro', icon: 'wallet-outline', route: '/admin-financeiro' },

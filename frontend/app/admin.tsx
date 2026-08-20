@@ -306,6 +306,14 @@ export default function AdminScreen() {
           <Ionicons name="people-outline" size={22} color={colors.onBrandPrimary} />
         </Pressable>
         <Pressable
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-conveniencia'); }}
+          hitSlop={12}
+          testID="admin-conveniencia-button"
+          style={[styles.logoutBtn, { marginLeft: spacing.sm }]}
+        >
+          <Ionicons name="pricetags-outline" size={22} color={colors.onBrandPrimary} />
+        </Pressable>
+        <Pressable
           onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-ponto'); }}
           hitSlop={12}
           testID="admin-ponto-button"

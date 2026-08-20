@@ -270,6 +270,15 @@ export const api = {
   setRecorrenciaActive: (id: string, active: boolean) =>
     req<Recorrencia>(`/financeiro/recorrencias/${id}/active`, { method: 'PATCH', body: JSON.stringify({ active }) }),
   deleteRecorrencia: (id: string) => req<{ ok: boolean }>(`/financeiro/recorrencias/${id}`, { method: 'DELETE' }),
+  // Lista de compras (conveniência)
+  createCompraItem: (data: { name: string; quantity?: string | null; observation?: string | null }) =>
+    req<CompraItem>('/lista-compras', { method: 'POST', body: JSON.stringify(data) }),
+  listCompraItems: (done?: boolean) => req<CompraItem[]>(`/lista-compras${done != null ? `?done=${done}` : ''}`),
+  updateCompraItem: (id: string, data: Partial<{ name: string; quantity: string | null; observation: string | null }>) =>
+    req<CompraItem>(`/lista-compras/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  setCompraItemDone: (id: string, done: boolean) =>
+    req<CompraItem>(`/lista-compras/${id}/done`, { method: 'PATCH', body: JSON.stringify({ done }) }),
+  deleteCompraItem: (id: string) => req<{ ok: boolean }>(`/lista-compras/${id}`, { method: 'DELETE' }),
 };
 
 export type Product = { id: string; name: string; price: number; active: boolean; in_stock: boolean; category: string; image_url?: string | null };
@@ -513,6 +522,16 @@ export type AnaliseFinanceira = {
   pagar: { total: number; by_category: AnaliseCategoria[] };
   saldo: number;
   by_month: AnaliseMes[];
+};
+
+export type CompraItem = {
+  id: string;
+  name: string;
+  quantity?: string | null;
+  observation?: string | null;
+  done: boolean;
+  created_at: string;
+  updated_at: string;
 };
 
 export type Recorrencia = {

@@ -2033,6 +2033,81 @@ async def delete_fornecedor(fid: str):
     return {"ok": True}
 
 
+# ===================== Conveniência: Lista de Compras =====================
+class CompraItemInput(BaseModel):
+    name: str
+    quantity: Optional[str] = None
+    observation: Optional[str] = None
+
+
+class CompraItemUpdate(BaseModel):
+    name: Optional[str] = None
+    quantity: Optional[str] = None
+    observation: Optional[str] = None
+
+
+class DoneInput(BaseModel):
+    done: bool
+
+
+@api_router.post("/lista-compras", dependencies=[Depends(require_admin)])
+async def create_compra_item(payload: CompraItemInput):
+    if not payload.name.strip():
+        raise HTTPException(status_code=400, detail="Nome é obrigatório.")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "name": payload.name.strip(),
+        "quantity": (payload.quantity or "").strip() or None,
+        "observation": (payload.observation or "").strip() or None,
+        "done": False,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+    await db.lista_compras.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/lista-compras", dependencies=[Depends(require_admin)])
+async def list_compras(done: Optional[bool] = None):
+    query: dict = {} if done is None else {"done": done}
+    return await db.lista_compras.find(query, {"_id": 0}).sort("created_at", 1).to_list(1000)
+
+
+@api_router.put("/lista-compras/{cid}", dependencies=[Depends(require_admin)])
+async def update_compra_item(cid: str, payload: CompraItemUpdate):
+    updates = payload.dict(exclude_unset=True)
+    if "name" in updates:
+        if not (updates["name"] or "").strip():
+            raise HTTPException(status_code=400, detail="Nome é obrigatório.")
+        updates["name"] = updates["name"].strip()
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    res = await db.lista_compras.update_one({"id": cid}, {"$set": updates})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Item não encontrado.")
+    return await db.lista_compras.find_one({"id": cid}, {"_id": 0})
+
+
+@api_router.patch("/lista-compras/{cid}/done", dependencies=[Depends(require_admin)])
+async def set_compra_done(cid: str, payload: DoneInput):
+    res = await db.lista_compras.update_one(
+        {"id": cid},
+        {"$set": {"done": payload.done, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Item não encontrado.")
+    return await db.lista_compras.find_one({"id": cid}, {"_id": 0})
+
+
+@api_router.delete("/lista-compras/{cid}", dependencies=[Depends(require_admin)])
+async def delete_compra_item(cid: str):
+    res = await db.lista_compras.delete_one({"id": cid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Item não encontrado.")
+    return {"ok": True}
+
+
 # ===================== Seed =====================
 SEED_PRODUCTS = [
     {"id": "seed-gelo", "name": "Gelo (saco 5kg)", "price": 15.0, "active": True, "in_stock": True, "category": "Outros", "image_url": None},
