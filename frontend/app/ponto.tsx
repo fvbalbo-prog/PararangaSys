@@ -22,6 +22,13 @@ function todayISO() {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+const PONTO_WINDOW_MIN = 7 * 60; // 07:00
+const PONTO_WINDOW_MAX = 19 * 60 + 30; // 19:30
+function withinPontoWindow(d: Date) {
+  const mins = d.getHours() * 60 + d.getMinutes();
+  return mins >= PONTO_WINDOW_MIN && mins <= PONTO_WINDOW_MAX;
+}
+
 export default function PontoScreen() {
   const router = useRouter();
   const [now, setNow] = useState(new Date());
@@ -53,8 +60,10 @@ export default function PontoScreen() {
   useFocusEffect(useCallback(() => { setLoading(true); load(); }, [load]));
 
   const punchedTypes = new Set(today.map((e) => e.type));
+  const withinWindow = withinPontoWindow(now);
 
   const bater = async (type: PontoType) => {
+    if (!withinWindow) return;
     setBating(type);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     try {
@@ -90,6 +99,15 @@ export default function PontoScreen() {
         <Text style={styles.clockTime} testID="ponto-clock">{fmtTime}</Text>
       </View>
 
+      {!withinWindow ? (
+        <View style={styles.windowBanner} testID="ponto-window-banner">
+          <Ionicons name="alert-circle" size={18} color="#FFFFFF" />
+          <Text style={styles.windowBannerText}>
+            Ponto só pode ser registrado entre 07:00 e 19:30.
+          </Text>
+        </View>
+      ) : null}
+
       <View style={styles.grid}>
         {PONTO_ORDER.map((p) => {
           const punched = punchedTypes.has(p.type);
@@ -97,11 +115,11 @@ export default function PontoScreen() {
             <Pressable
               key={p.type}
               testID={`ponto-btn-${p.type}`}
-              disabled={bating !== null}
+              disabled={bating !== null || !withinWindow}
               onPress={() => bater(p.type)}
-              style={({ pressed }) => [styles.card, pressed && { opacity: 0.85 }]}
+              style={({ pressed }) => [styles.card, pressed && { opacity: 0.85 }, !withinWindow && styles.cardDisabled]}
             >
-              <View style={[styles.cardIcon, { backgroundColor: p.color }]}>
+              <View style={[styles.cardIcon, { backgroundColor: p.color }, !withinWindow && styles.cardIconDisabled]}>
                 {bating === p.type ? (
                   <ActivityIndicator color="#FFFFFF" size="small" />
                 ) : (
@@ -169,6 +187,14 @@ const styles = StyleSheet.create({
   },
   clockDate: { color: colors.brandSecondary, fontSize: typography.sm, fontWeight: '700', textTransform: 'capitalize' },
   clockTime: { color: colors.onBrandPrimary, fontSize: 40, fontWeight: '800', marginTop: spacing.xs, fontVariant: ['tabular-nums'] },
+  windowBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    backgroundColor: colors.error, marginHorizontal: spacing.lg, marginBottom: spacing.lg,
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderRadius: radius.md,
+  },
+  windowBannerText: { color: '#FFFFFF', fontSize: typography.sm, fontWeight: '700', flex: 1 },
+  cardDisabled: { opacity: 0.5 },
+  cardIconDisabled: { backgroundColor: colors.onSurfaceTertiary },
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',

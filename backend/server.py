@@ -1472,6 +1472,8 @@ async def read_statement(sid: str):
 
 # ===================== Ponto Eletrônico =====================
 PONTO_TYPES = ("entrada", "saida_almoco", "retorno_almoco", "saida_final")
+PONTO_MIN = time(7, 0)
+PONTO_MAX = time(19, 30)
 
 
 class PontoInput(BaseModel):
@@ -1490,6 +1492,11 @@ async def bater_ponto(payload: PontoInput, claims: dict = Depends(require_staff)
     if not user:
         raise HTTPException(status_code=404, detail="Usuário não encontrado.")
     now = now_br()
+    if not (PONTO_MIN <= now.time() <= PONTO_MAX):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Ponto só pode ser registrado entre {PONTO_MIN.strftime('%H:%M')} e {PONTO_MAX.strftime('%H:%M')}.",
+        )
     now_iso = datetime.now(timezone.utc).isoformat()
     doc = {
         "id": str(uuid.uuid4()),
