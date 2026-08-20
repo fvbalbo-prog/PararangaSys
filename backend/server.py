@@ -1628,6 +1628,366 @@ async def relatorio_ponto(date_from: str, date_to: str, cpf: Optional[str] = Non
     return {"date_from": date_from, "date_to": date_to, "employees": employees}
 
 
+# ===================== Painel Financeiro (Contas a Pagar / Receber) =====================
+FINANCEIRO_CATEGORIES_PAGAR = ["Fornecedores", "Manutenção", "Salários", "Utilidades", "Impostos", "Outros"]
+FINANCEIRO_CATEGORIES_RECEBER = ["Mensalidade", "Reboque", "Conveniência", "Serviços", "Outros"]
+
+
+class FinanceiroInput(BaseModel):
+    kind: Literal["pagar", "receber"]
+    description: str
+    category: str
+    amount: float
+    due_date: str  # YYYY-MM-DD
+    cpf: Optional[str] = None            # receber: cliente vinculado (opcional)
+    supplier_name: Optional[str] = None  # pagar: fornecedor (opcional)
+    observation: Optional[str] = None
+    recurring: bool = False              # ex.: mensalidade da lancha, cobrada todo mês
+    recurring_day: Optional[int] = None  # dia do vencimento em cada mês; default = dia de due_date
+
+
+class FinanceiroUpdate(BaseModel):
+    description: Optional[str] = None
+    category: Optional[str] = None
+    amount: Optional[float] = None
+    due_date: Optional[str] = None
+    observation: Optional[str] = None
+
+
+class FinanceiroPay(BaseModel):
+    paid_amount: Optional[float] = None  # default: valor integral
+
+
+@api_router.get("/financeiro/categorias", dependencies=[Depends(require_admin)])
+async def financeiro_categorias():
+    return {"pagar": FINANCEIRO_CATEGORIES_PAGAR, "receber": FINANCEIRO_CATEGORIES_RECEBER}
+
+
+def _days_in_month(year: int, month: int) -> int:
+    return (date_cls(year + (month == 12), (month % 12) + 1, 1) - timedelta(days=1)).day
+
+
+@api_router.post("/financeiro", dependencies=[Depends(require_admin)])
+async def create_financeiro(payload: FinanceiroInput):
+    if payload.amount <= 0:
+        raise HTTPException(status_code=400, detail="Valor deve ser maior que zero.")
+    if not payload.description.strip():
+        raise HTTPException(status_code=400, detail="Descrição é obrigatória.")
+    cpf = None
+    client_name = None
+    if payload.cpf:
+        cpf = normalize_cpf(payload.cpf)
+        user = await db.users.find_one({"cpf": cpf}, {"_id": 0})
+        if not user:
+            raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+        client_name = user["name"]
+    supplier_name = (payload.supplier_name or "").strip() or None
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    recurring_id = None
+    if payload.recurring:
+        try:
+            due_day = int(payload.due_date.split("-")[2])
+        except (IndexError, ValueError):
+            raise HTTPException(status_code=400, detail="Data de vencimento inválida.")
+        day = payload.recurring_day or due_day
+        if not (1 <= day <= 31):
+            raise HTTPException(status_code=400, detail="Dia de cobrança deve estar entre 1 e 31.")
+        rule = {
+            "id": str(uuid.uuid4()),
+            "kind": payload.kind,
+            "description": payload.description.strip(),
+            "category": payload.category,
+            "amount": round(payload.amount, 2),
+            "day": day,
+            "cpf": cpf,
+            "client_name": client_name,
+            "supplier_name": supplier_name,
+            "observation": (payload.observation or "").strip() or None,
+            "active": True,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        }
+        await db.recorrencias.insert_one(rule)
+        recurring_id = rule["id"]
+
+    doc = {
+        "id": str(uuid.uuid4()),
+        "kind": payload.kind,
+        "description": payload.description.strip(),
+        "category": payload.category,
+        "amount": round(payload.amount, 2),
+        "due_date": payload.due_date,
+        "cpf": cpf,
+        "client_name": client_name,
+        "supplier_name": supplier_name,
+        "observation": (payload.observation or "").strip() or None,
+        "status": "pendente",
+        "paid_amount": None,
+        "paid_at": None,
+        "recurring_id": recurring_id,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+    await db.financeiro.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+def _financeiro_with_display_status(doc: dict) -> dict:
+    today = now_br().strftime("%Y-%m-%d")
+    doc["status_display"] = "atrasado" if doc["status"] == "pendente" and doc["due_date"] < today else doc["status"]
+    return doc
+
+
+async def _generate_recurring_for_month(month: str):
+    """Ensures every active recurring rule has a financeiro entry for `month`
+    (YYYY-MM), creating one on the fly if missing. Called whenever that month
+    is viewed — there's no background scheduler in this app, so generation is
+    lazy instead of cron-driven."""
+    year, mon = int(month[:4]), int(month[5:7])
+    rules = await db.recorrencias.find({"active": True}, {"_id": 0}).to_list(1000)
+    if not rules:
+        return
+    existing = await db.financeiro.find(
+        {"recurring_id": {"$in": [r["id"] for r in rules]}, "due_date": {"$regex": f"^{month}"}},
+        {"_id": 0, "recurring_id": 1},
+    ).to_list(1000)
+    have = {d["recurring_id"] for d in existing}
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for r in rules:
+        if r["id"] in have:
+            continue
+        day = min(r["day"], _days_in_month(year, mon))
+        doc = {
+            "id": str(uuid.uuid4()),
+            "kind": r["kind"],
+            "description": r["description"],
+            "category": r["category"],
+            "amount": r["amount"],
+            "due_date": f"{month}-{day:02d}",
+            "cpf": r.get("cpf"),
+            "client_name": r.get("client_name"),
+            "supplier_name": r.get("supplier_name"),
+            "observation": r.get("observation"),
+            "status": "pendente",
+            "paid_amount": None,
+            "paid_at": None,
+            "recurring_id": r["id"],
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        }
+        await db.financeiro.insert_one(doc)
+
+
+@api_router.get("/financeiro", dependencies=[Depends(require_admin)])
+async def list_financeiro(kind: Optional[str] = None, status: Optional[str] = None, month: Optional[str] = None):
+    if month:
+        await _generate_recurring_for_month(month)
+    query: dict = {}
+    if kind:
+        query["kind"] = kind
+    if month:
+        query["due_date"] = {"$regex": f"^{month}"}
+    docs = await db.financeiro.find(query, {"_id": 0}).sort("due_date", 1).to_list(5000)
+    docs = [_financeiro_with_display_status(d) for d in docs]
+    if status:
+        docs = [d for d in docs if d["status_display"] == status]
+    return docs
+
+
+@api_router.get("/financeiro/recorrencias", dependencies=[Depends(require_admin)])
+async def list_recorrencias(kind: Optional[str] = None):
+    query: dict = {"kind": kind} if kind else {}
+    return await db.recorrencias.find(query, {"_id": 0}).sort("description", 1).to_list(1000)
+
+
+@api_router.patch("/financeiro/recorrencias/{rid}/active", dependencies=[Depends(require_admin)])
+async def set_recorrencia_active(rid: str, payload: ActiveInput):
+    res = await db.recorrencias.update_one(
+        {"id": rid},
+        {"$set": {"active": payload.active, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Recorrência não encontrada.")
+    return await db.recorrencias.find_one({"id": rid}, {"_id": 0})
+
+
+@api_router.delete("/financeiro/recorrencias/{rid}", dependencies=[Depends(require_admin)])
+async def delete_recorrencia(rid: str):
+    """Cancela a regra — não afeta os lançamentos já gerados em meses anteriores."""
+    res = await db.recorrencias.delete_one({"id": rid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Recorrência não encontrada.")
+    return {"ok": True}
+
+
+@api_router.put("/financeiro/{fid}", dependencies=[Depends(require_admin)])
+async def update_financeiro(fid: str, payload: FinanceiroUpdate):
+    existing = await db.financeiro.find_one({"id": fid}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Registro não encontrado.")
+    updates = payload.dict(exclude_unset=True)
+    if "description" in updates:
+        if not (updates["description"] or "").strip():
+            raise HTTPException(status_code=400, detail="Descrição é obrigatória.")
+        updates["description"] = updates["description"].strip()
+    if "amount" in updates and updates["amount"] is not None and updates["amount"] <= 0:
+        raise HTTPException(status_code=400, detail="Valor deve ser maior que zero.")
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.financeiro.update_one({"id": fid}, {"$set": updates})
+    return _financeiro_with_display_status(await db.financeiro.find_one({"id": fid}, {"_id": 0}))
+
+
+@api_router.patch("/financeiro/{fid}/pay", dependencies=[Depends(require_admin)])
+async def pay_financeiro(fid: str, payload: FinanceiroPay):
+    doc = await db.financeiro.find_one({"id": fid}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Registro não encontrado.")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    paid_amount = payload.paid_amount if payload.paid_amount is not None else doc["amount"]
+    await db.financeiro.update_one(
+        {"id": fid},
+        {"$set": {"status": "pago", "paid_amount": round(paid_amount, 2), "paid_at": now_iso, "updated_at": now_iso}},
+    )
+    return _financeiro_with_display_status(await db.financeiro.find_one({"id": fid}, {"_id": 0}))
+
+
+@api_router.patch("/financeiro/{fid}/reabrir", dependencies=[Depends(require_admin)])
+async def reopen_financeiro(fid: str):
+    now_iso = datetime.now(timezone.utc).isoformat()
+    res = await db.financeiro.update_one(
+        {"id": fid},
+        {"$set": {"status": "pendente", "paid_amount": None, "paid_at": None, "updated_at": now_iso}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Registro não encontrado.")
+    return _financeiro_with_display_status(await db.financeiro.find_one({"id": fid}, {"_id": 0}))
+
+
+@api_router.delete("/financeiro/{fid}", dependencies=[Depends(require_admin)])
+async def delete_financeiro(fid: str):
+    res = await db.financeiro.delete_one({"id": fid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Registro não encontrado.")
+    return {"ok": True}
+
+
+@api_router.get("/financeiro/resumo", dependencies=[Depends(require_admin)])
+async def resumo_financeiro(month: Optional[str] = None):
+    """Totais do mês por status, separados por contas a pagar e a receber, mais
+    o saldo previsto (a receber - a pagar, considerando pendentes e atrasados)."""
+    if not month:
+        now = now_br()
+        month = f"{now.year}-{now.month:02d}"
+    docs = await db.financeiro.find({"due_date": {"$regex": f"^{month}"}}, {"_id": 0}).to_list(5000)
+    today = now_br().strftime("%Y-%m-%d")
+    totals = {
+        "pagar": {"pendente": 0.0, "atrasado": 0.0, "pago": 0.0},
+        "receber": {"pendente": 0.0, "atrasado": 0.0, "pago": 0.0},
+    }
+    for d in docs:
+        bucket = totals[d["kind"]]
+        if d["status"] == "pago":
+            bucket["pago"] += d.get("paid_amount") if d.get("paid_amount") is not None else d["amount"]
+        elif d["due_date"] < today:
+            bucket["atrasado"] += d["amount"]
+        else:
+            bucket["pendente"] += d["amount"]
+    for k in totals:
+        for s in totals[k]:
+            totals[k][s] = round(totals[k][s], 2)
+    saldo_previsto = round(
+        totals["receber"]["pendente"] + totals["receber"]["atrasado"]
+        - totals["pagar"]["pendente"] - totals["pagar"]["atrasado"],
+        2,
+    )
+    return {"month": month, **totals, "saldo_previsto": saldo_previsto}
+
+
+# ===================== Fornecedores =====================
+class FornecedorInput(BaseModel):
+    name: str
+    category: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    document: Optional[str] = None  # CNPJ ou CPF
+    observation: Optional[str] = None
+
+
+class FornecedorUpdate(BaseModel):
+    name: Optional[str] = None
+    category: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    document: Optional[str] = None
+    observation: Optional[str] = None
+
+
+@api_router.post("/fornecedores", dependencies=[Depends(require_admin)])
+async def create_fornecedor(payload: FornecedorInput):
+    if not payload.name.strip():
+        raise HTTPException(status_code=400, detail="Nome é obrigatório.")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "name": payload.name.strip(),
+        "category": (payload.category or "").strip() or None,
+        "phone": (payload.phone or "").strip() or None,
+        "email": (payload.email or "").strip() or None,
+        "document": (payload.document or "").strip() or None,
+        "observation": (payload.observation or "").strip() or None,
+        "active": True,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+    await db.fornecedores.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/fornecedores", dependencies=[Depends(require_admin)])
+async def list_fornecedores(active: Optional[bool] = None):
+    query: dict = {}
+    if active is not None:
+        query["active"] = active
+    docs = await db.fornecedores.find(query, {"_id": 0}).sort("name", 1).to_list(1000)
+    return docs
+
+
+@api_router.put("/fornecedores/{fid}", dependencies=[Depends(require_admin)])
+async def update_fornecedor(fid: str, payload: FornecedorUpdate):
+    updates = payload.dict(exclude_unset=True)
+    if "name" in updates:
+        if not (updates["name"] or "").strip():
+            raise HTTPException(status_code=400, detail="Nome é obrigatório.")
+        updates["name"] = updates["name"].strip()
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    res = await db.fornecedores.update_one({"id": fid}, {"$set": updates})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Fornecedor não encontrado.")
+    return await db.fornecedores.find_one({"id": fid}, {"_id": 0})
+
+
+@api_router.patch("/fornecedores/{fid}/active", dependencies=[Depends(require_admin)])
+async def set_fornecedor_active(fid: str, payload: ActiveInput):
+    res = await db.fornecedores.update_one(
+        {"id": fid},
+        {"$set": {"active": payload.active, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Fornecedor não encontrado.")
+    return await db.fornecedores.find_one({"id": fid}, {"_id": 0})
+
+
+@api_router.delete("/fornecedores/{fid}", dependencies=[Depends(require_admin)])
+async def delete_fornecedor(fid: str):
+    res = await db.fornecedores.delete_one({"id": fid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Fornecedor não encontrado.")
+    return {"ok": True}
+
+
 # ===================== Seed =====================
 SEED_PRODUCTS = [
     {"id": "seed-gelo", "name": "Gelo (saco 5kg)", "price": 15.0, "active": True, "in_stock": True, "category": "Outros", "image_url": None},

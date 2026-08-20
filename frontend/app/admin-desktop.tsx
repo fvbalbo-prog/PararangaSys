@@ -25,6 +25,7 @@ const NAV: NavItem[] = [
   { key: 'produtos', label: 'Conveniência', icon: 'pricetags-outline', route: '/admin-produtos' },
   { key: 'faturamento', label: 'Faturamento', icon: 'bar-chart-outline', route: '/admin-relatorio' },
   { key: 'ponto', label: 'Ponto Eletrônico', icon: 'time-outline', route: '/admin-ponto' },
+  { key: 'financeiro', label: 'Painel Financeiro', icon: 'wallet-outline', route: '/admin-financeiro' },
 ];
 
 export default function AdminDesktopScreen() {

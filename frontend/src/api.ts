@@ -225,6 +225,49 @@ export const api = {
     if (cpf) qs.set('cpf', cpf);
     return req<PontoRelatorio>(`/ponto/relatorio?${qs.toString()}`);
   },
+  // Painel Financeiro
+  financeiroCategorias: () => req<{ pagar: string[]; receber: string[] }>('/financeiro/categorias'),
+  createFinanceiro: (data: {
+    kind: FinanceiroKind;
+    description: string;
+    category: string;
+    amount: number;
+    due_date: string;
+    cpf?: string | null;
+    supplier_name?: string | null;
+    observation?: string | null;
+    recurring?: boolean;
+    recurring_day?: number;
+  }) => req<FinanceiroEntry>('/financeiro', { method: 'POST', body: JSON.stringify(data) }),
+  listFinanceiro: (params?: { kind?: FinanceiroKind; status?: FinanceiroStatus; month?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.kind) qs.set('kind', params.kind);
+    if (params?.status) qs.set('status', params.status);
+    if (params?.month) qs.set('month', params.month);
+    const s = qs.toString();
+    return req<FinanceiroEntry[]>(`/financeiro${s ? `?${s}` : ''}`);
+  },
+  updateFinanceiro: (id: string, data: Partial<{ description: string; category: string; amount: number; due_date: string; observation: string | null }>) =>
+    req<FinanceiroEntry>(`/financeiro/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  payFinanceiro: (id: string, paidAmount?: number) =>
+    req<FinanceiroEntry>(`/financeiro/${id}/pay`, { method: 'PATCH', body: JSON.stringify(paidAmount != null ? { paid_amount: paidAmount } : {}) }),
+  reopenFinanceiro: (id: string) => req<FinanceiroEntry>(`/financeiro/${id}/reabrir`, { method: 'PATCH' }),
+  deleteFinanceiro: (id: string) => req<{ ok: boolean }>(`/financeiro/${id}`, { method: 'DELETE' }),
+  resumoFinanceiro: (month?: string) => req<FinanceiroResumo>(`/financeiro/resumo${month ? `?month=${month}` : ''}`),
+  // Fornecedores
+  createFornecedor: (data: { name: string; category?: string | null; phone?: string | null; email?: string | null; document?: string | null; observation?: string | null }) =>
+    req<Fornecedor>('/fornecedores', { method: 'POST', body: JSON.stringify(data) }),
+  listFornecedores: (active?: boolean) => req<Fornecedor[]>(`/fornecedores${active != null ? `?active=${active}` : ''}`),
+  updateFornecedor: (id: string, data: Partial<{ name: string; category: string | null; phone: string | null; email: string | null; document: string | null; observation: string | null }>) =>
+    req<Fornecedor>(`/fornecedores/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  setFornecedorActive: (id: string, active: boolean) =>
+    req<Fornecedor>(`/fornecedores/${id}/active`, { method: 'PATCH', body: JSON.stringify({ active }) }),
+  deleteFornecedor: (id: string) => req<{ ok: boolean }>(`/fornecedores/${id}`, { method: 'DELETE' }),
+  // Recorrências (cobranças/pagamentos automáticos mês a mês)
+  listRecorrencias: (kind?: FinanceiroKind) => req<Recorrencia[]>(`/financeiro/recorrencias${kind ? `?kind=${kind}` : ''}`),
+  setRecorrenciaActive: (id: string, active: boolean) =>
+    req<Recorrencia>(`/financeiro/recorrencias/${id}/active`, { method: 'PATCH', body: JSON.stringify({ active }) }),
+  deleteRecorrencia: (id: string) => req<{ ok: boolean }>(`/financeiro/recorrencias/${id}`, { method: 'DELETE' }),
 };
 
 export type Product = { id: string; name: string; price: number; active: boolean; in_stock: boolean; category: string; image_url?: string | null };
@@ -414,3 +457,63 @@ export type PontoEntry = {
 export type PontoRelatorioDia = { date: string; hours: number } & Partial<Record<PontoType, string>>;
 export type PontoRelatorioFuncionario = { cpf: string; name: string; total_hours: number; days: PontoRelatorioDia[] };
 export type PontoRelatorio = { date_from: string; date_to: string; employees: PontoRelatorioFuncionario[] };
+
+export type FinanceiroKind = 'pagar' | 'receber';
+export type FinanceiroStatus = 'pendente' | 'atrasado' | 'pago';
+
+export type FinanceiroEntry = {
+  id: string;
+  kind: FinanceiroKind;
+  description: string;
+  category: string;
+  amount: number;
+  due_date: string; // YYYY-MM-DD
+  cpf?: string | null;
+  client_name?: string | null;
+  supplier_name?: string | null;
+  observation?: string | null;
+  status: 'pendente' | 'pago';
+  status_display: FinanceiroStatus;
+  paid_amount?: number | null;
+  paid_at?: string | null;
+  recurring_id?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type FinanceiroTotals = { pendente: number; atrasado: number; pago: number };
+export type FinanceiroResumo = {
+  month: string;
+  pagar: FinanceiroTotals;
+  receber: FinanceiroTotals;
+  saldo_previsto: number;
+};
+
+export type Fornecedor = {
+  id: string;
+  name: string;
+  category?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  document?: string | null;
+  observation?: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Recorrencia = {
+  id: string;
+  kind: FinanceiroKind;
+  description: string;
+  category: string;
+  amount: number;
+  day: number;
+  cpf?: string | null;
+  client_name?: string | null;
+  supplier_name?: string | null;
+  observation?: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+};

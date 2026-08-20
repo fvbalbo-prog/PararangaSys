@@ -314,6 +314,14 @@ export default function AdminScreen() {
           <Ionicons name="time-outline" size={22} color={colors.onBrandPrimary} />
         </Pressable>
         <Pressable
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-financeiro'); }}
+          hitSlop={12}
+          testID="admin-financeiro-button"
+          style={[styles.logoutBtn, { marginLeft: spacing.sm }]}
+        >
+          <Ionicons name="wallet-outline" size={22} color={colors.onBrandPrimary} />
+        </Pressable>
+        <Pressable
           onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setLayoutMode('desktop'); }}
           hitSlop={12}
           testID="admin-desktop-toggle"
