@@ -306,6 +306,14 @@ export default function AdminScreen() {
           <Ionicons name="people-outline" size={22} color={colors.onBrandPrimary} />
         </Pressable>
         <Pressable
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-ponto'); }}
+          hitSlop={12}
+          testID="admin-ponto-button"
+          style={[styles.logoutBtn, { marginLeft: spacing.sm }]}
+        >
+          <Ionicons name="time-outline" size={22} color={colors.onBrandPrimary} />
+        </Pressable>
+        <Pressable
           onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setLayoutMode('desktop'); }}
           hitSlop={12}
           testID="admin-desktop-toggle"

@@ -1470,6 +1470,144 @@ async def read_statement(sid: str):
     return {"ok": True}
 
 
+# ===================== Ponto Eletrônico =====================
+PONTO_TYPES = ("entrada", "saida_almoco", "retorno_almoco", "saida_final")
+
+
+class PontoInput(BaseModel):
+    type: Literal["entrada", "saida_almoco", "retorno_almoco", "saida_final"]
+
+
+class PontoUpdate(BaseModel):
+    date: Optional[str] = None  # YYYY-MM-DD
+    time: Optional[str] = None  # HH:MM
+
+
+@api_router.post("/ponto")
+async def bater_ponto(payload: PontoInput, claims: dict = Depends(require_staff)):
+    cpf = claims.get("cpf")
+    user = await db.users.find_one({"cpf": cpf}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado.")
+    now = now_br()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "cpf": cpf,
+        "user_name": user.get("name"),
+        "type": payload.type,
+        "date": now.strftime("%Y-%m-%d"),
+        "time": now.strftime("%H:%M"),
+        "edited": False,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+    await db.time_entries.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/ponto")
+async def list_ponto(
+    cpf: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    claims: dict = Depends(require_staff),
+):
+    # Staff only sees their own punches; admin can see anyone's (or all, if no cpf given).
+    query: dict = {}
+    if not claims.get("is_admin"):
+        query["cpf"] = claims.get("cpf")
+    elif cpf:
+        query["cpf"] = normalize_cpf(cpf)
+    if date_from or date_to:
+        date_q = {}
+        if date_from:
+            date_q["$gte"] = date_from
+        if date_to:
+            date_q["$lte"] = date_to
+        query["date"] = date_q
+    docs = await db.time_entries.find(query, {"_id": 0}).sort([("date", -1), ("time", -1)]).to_list(2000)
+    return docs
+
+
+@api_router.put("/ponto/{pid}", dependencies=[Depends(require_admin)])
+async def update_ponto(pid: str, payload: PontoUpdate):
+    updates: dict = {"updated_at": datetime.now(timezone.utc).isoformat(), "edited": True}
+    if payload.date is not None:
+        updates["date"] = payload.date
+    if payload.time is not None:
+        updates["time"] = payload.time
+    res = await db.time_entries.update_one({"id": pid}, {"$set": updates})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Registro de ponto não encontrado.")
+    return await db.time_entries.find_one({"id": pid}, {"_id": 0})
+
+
+@api_router.delete("/ponto/{pid}", dependencies=[Depends(require_admin)])
+async def delete_ponto(pid: str):
+    res = await db.time_entries.delete_one({"id": pid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Registro de ponto não encontrado.")
+    return {"ok": True}
+
+
+def _ponto_day_hours(entries_for_day: dict) -> float:
+    """entries_for_day: {'entrada': 'HH:MM', 'saida_almoco': ..., ...}. Missing or
+    out-of-order pairs (e.g. saída antes da entrada) simply don't count — a
+    partial day (esqueceu de bater um ponto) shows less than the real total
+    instead of raising, since this feeds a report an admin reads, not a payment
+    calculation that must reject bad data outright."""
+    def to_min(hhmm):
+        if not hhmm:
+            return None
+        h, m = hhmm.split(":")
+        return int(h) * 60 + int(m)
+
+    entrada = to_min(entries_for_day.get("entrada"))
+    saida_almoco = to_min(entries_for_day.get("saida_almoco"))
+    retorno_almoco = to_min(entries_for_day.get("retorno_almoco"))
+    saida_final = to_min(entries_for_day.get("saida_final"))
+    total = 0
+    if entrada is not None and saida_almoco is not None and saida_almoco > entrada:
+        total += saida_almoco - entrada
+    if retorno_almoco is not None and saida_final is not None and saida_final > retorno_almoco:
+        total += saida_final - retorno_almoco
+    return round(total / 60, 2)
+
+
+@api_router.get("/ponto/relatorio", dependencies=[Depends(require_admin)])
+async def relatorio_ponto(date_from: str, date_to: str, cpf: Optional[str] = None):
+    """Total de horas trabalhadas por funcionário no período, calculado a partir
+    dos pares entrada/saída-almoço e retorno-almoço/saída-final de cada dia."""
+    query: dict = {"date": {"$gte": date_from, "$lte": date_to}}
+    if cpf:
+        query["cpf"] = normalize_cpf(cpf)
+    docs = await db.time_entries.find(query, {"_id": 0}).to_list(5000)
+
+    by_day: dict = {}
+    for d in docs:
+        by_day.setdefault((d["cpf"], d["date"]), {})[d["type"]] = d["time"]
+
+    by_employee: dict = {}
+    for (c, date), entries in by_day.items():
+        hours = _ponto_day_hours(entries)
+        b = by_employee.setdefault(c, {"cpf": c, "name": None, "total_hours": 0.0, "days": []})
+        b["total_hours"] = round(b["total_hours"] + hours, 2)
+        b["days"].append({"date": date, "hours": hours, **entries})
+
+    if by_employee:
+        users = await db.users.find({"cpf": {"$in": list(by_employee.keys())}}, {"_id": 0, "cpf": 1, "name": 1}).to_list(len(by_employee))
+        names = {u["cpf"]: u["name"] for u in users}
+        for c, b in by_employee.items():
+            b["name"] = names.get(c, c)
+
+    employees = sorted(by_employee.values(), key=lambda x: x["name"] or "")
+    for b in employees:
+        b["days"].sort(key=lambda x: x["date"])
+    return {"date_from": date_from, "date_to": date_to, "employees": employees}
+
+
 # ===================== Seed =====================
 SEED_PRODUCTS = [
     {"id": "seed-gelo", "name": "Gelo (saco 5kg)", "price": 15.0, "active": True, "in_stock": True, "category": "Outros", "image_url": None},

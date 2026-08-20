@@ -206,6 +206,25 @@ export const api = {
     req<Statement>('/statements/send', { method: 'POST', body: JSON.stringify({ cpf, month }) }),
   listStatements: (cpf?: string) => req<Statement[]>(`/statements${cpf ? `?cpf=${cpf}` : ''}`),
   readStatement: (id: string) => req<{ ok: boolean }>(`/statements/${id}/read`, { method: 'PATCH' }),
+  // Ponto Eletrônico
+  baterPonto: (type: PontoType) =>
+    req<PontoEntry>('/ponto', { method: 'POST', body: JSON.stringify({ type }) }),
+  listPonto: (params?: { cpf?: string; date_from?: string; date_to?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.cpf) qs.set('cpf', params.cpf);
+    if (params?.date_from) qs.set('date_from', params.date_from);
+    if (params?.date_to) qs.set('date_to', params.date_to);
+    const s = qs.toString();
+    return req<PontoEntry[]>(`/ponto${s ? `?${s}` : ''}`);
+  },
+  updatePonto: (id: string, data: { date?: string; time?: string }) =>
+    req<PontoEntry>(`/ponto/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deletePonto: (id: string) => req<{ ok: boolean }>(`/ponto/${id}`, { method: 'DELETE' }),
+  relatorioPonto: (dateFrom: string, dateTo: string, cpf?: string) => {
+    const qs = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
+    if (cpf) qs.set('cpf', cpf);
+    return req<PontoRelatorio>(`/ponto/relatorio?${qs.toString()}`);
+  },
 };
 
 export type Product = { id: string; name: string; price: number; active: boolean; in_stock: boolean; category: string; image_url?: string | null };
@@ -370,3 +389,28 @@ export type Client = {
   is_staff?: boolean;
   active?: boolean;
 };
+
+export type PontoType = 'entrada' | 'saida_almoco' | 'retorno_almoco' | 'saida_final';
+
+export const PONTO_LABELS: Record<PontoType, string> = {
+  entrada: 'Entrada',
+  saida_almoco: 'Saída Almoço',
+  retorno_almoco: 'Retorno Almoço',
+  saida_final: 'Saída Final',
+};
+
+export type PontoEntry = {
+  id: string;
+  cpf: string;
+  user_name: string;
+  type: PontoType;
+  date: string; // YYYY-MM-DD
+  time: string; // HH:MM
+  edited: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PontoRelatorioDia = { date: string; hours: number } & Partial<Record<PontoType, string>>;
+export type PontoRelatorioFuncionario = { cpf: string; name: string; total_hours: number; days: PontoRelatorioDia[] };
+export type PontoRelatorio = { date_from: string; date_to: string; employees: PontoRelatorioFuncionario[] };

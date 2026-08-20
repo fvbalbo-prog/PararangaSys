@@ -107,6 +107,7 @@ export default function StaffScreen() {
     { key: 'todas', title: 'Painel de Movimentações', subtitle: 'Todas as movimentações do dia', icon: 'list', color: '#0E7490', route: '/staff-movimentacoes?filter=all' },
     { key: 'balcao', title: 'Balcão de Pedidos', subtitle: 'Conveniência: preparar e entregar', icon: 'cart', color: '#7C3AED', route: '/staff-balcao', badge: balcaoCount },
     { key: 'autorizados', title: 'Pessoas Autorizadas', subtitle: 'Consulta das autorizações de hoje', icon: 'shield-checkmark', color: '#4D7C0F', route: '/staff-autorizacoes' },
+    { key: 'ponto', title: 'Ponto Eletrônico', subtitle: 'Registrar entrada, almoço e saída', icon: 'time', color: '#0369A1', route: '/ponto' },
   ];
 
   return (
