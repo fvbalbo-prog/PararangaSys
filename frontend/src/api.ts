@@ -267,6 +267,7 @@ export const api = {
     return req<EscalaEntry[]>(`/escala${s ? `?${s}` : ''}`);
   },
   deleteEscala: (id: string) => req<{ ok: boolean }>(`/escala/${id}`, { method: 'DELETE' }),
+  listEscalaStaff: () => req<EscalaStaffMember[]>('/escala/staff'),
   // Painel Financeiro
   financeiroCategorias: () => req<{ pagar: string[]; receber: string[] }>('/financeiro/categorias'),
   createFinanceiro: (data: {
@@ -571,6 +572,8 @@ export type PontoEntry = {
 export type PontoRelatorioDia = { date: string; hours: number } & Partial<Record<PontoType, string>>;
 export type PontoRelatorioFuncionario = { cpf: string; name: string; total_hours: number; days: PontoRelatorioDia[] };
 export type PontoRelatorio = { date_from: string; date_to: string; employees: PontoRelatorioFuncionario[] };
+
+export type EscalaStaffMember = { cpf: string; name: string };
 
 export type EscalaEntry = {
   id: string;

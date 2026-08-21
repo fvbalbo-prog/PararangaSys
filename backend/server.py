@@ -1973,6 +1973,19 @@ async def list_escala(month: Optional[str] = None, cpf: Optional[str] = None):
     return docs
 
 
+@api_router.get("/escala/staff", dependencies=[Depends(require_staff)])
+async def list_escala_staff():
+    """Lista enxuta de funcionários (cpf + nome), liberada pra qualquer staff
+    — só pra montar a legenda de cores da escala na tela de visualização.
+    GET /users (com todos os campos) continua admin-only.
+    Precisa vir ANTES de /escala/{eid} nesta ordem de registro — senão a
+    rota com path param captura "staff" como eid e responde 405 pro GET."""
+    docs = await db.users.find(
+        {"is_staff": True, "active": {"$ne": False}}, {"_id": 0, "cpf": 1, "name": 1}
+    ).sort("name", 1).to_list(500)
+    return docs
+
+
 @api_router.delete("/escala/{eid}", dependencies=[Depends(require_admin)])
 async def delete_escala(eid: str):
     res = await db.escalas.delete_one({"id": eid})

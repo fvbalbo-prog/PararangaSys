@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,6 +16,10 @@ function pad(n: number) {
 function currentMonth() {
   const d = new Date();
   return { year: d.getFullYear(), month: d.getMonth() + 1 };
+}
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 function monthStr(year: number, month: number) {
   return `${year}-${pad(month)}`;
@@ -39,13 +43,16 @@ function labelForDay(iso: string) {
 const WEEKDAY_HEAD = ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'];
 const firstName = (n: string) => n.split(' ')[0];
 
+// Paleta categórica validada (ordem fixa) — mesma usada na Análise Financeira.
+const PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948'];
+
 export default function AdminEscalaScreen() {
   const router = useRouter();
   const [{ year, month }, setYm] = useState(currentMonth());
   const [entries, setEntries] = useState<EscalaEntry[]>([]);
   const [staff, setStaff] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
-  const [dayModal, setDayModal] = useState<string | null>(null);
+  const [selectedDay, setSelectedDay] = useState(todayISO());
   const [pickName, setPickName] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [dialog, setDialog] = useState<{ title: string; message?: string; buttons: DialogButton[] } | null>(null);
@@ -54,7 +61,7 @@ export default function AdminEscalaScreen() {
     setDialog({ title, message, buttons: [{ label: 'OK', variant: 'primary', onPress: closeDialog }] });
 
   const ms = monthStr(year, month);
-  const todayISO = (() => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; })();
+  const today = todayISO();
 
   const load = useCallback(async () => {
     try {
@@ -63,7 +70,7 @@ export default function AdminEscalaScreen() {
         api.listUsers(),
       ]);
       setEntries(ents);
-      setStaff(users.filter((u) => u.is_staff && u.active !== false));
+      setStaff(users.filter((u) => u.is_staff && u.active !== false).sort((a, b) => a.name.localeCompare(b.name)));
     } catch {
       setEntries([]);
     } finally {
@@ -73,14 +80,22 @@ export default function AdminEscalaScreen() {
 
   useFocusEffect(useCallback(() => { setLoading(true); load(); }, [load]));
 
+  const colorForCpf = useCallback(
+    (cpf: string) => {
+      const idx = staff.findIndex((s) => s.cpf === cpf);
+      return PALETTE[(idx >= 0 ? idx : 0) % PALETTE.length];
+    },
+    [staff]
+  );
+
   const shiftMonth = (delta: number) => {
     Haptics.selectionAsync();
-    setYm((p) => {
-      let m = p.month + delta, y = p.year;
-      if (m < 1) { m = 12; y -= 1; }
-      if (m > 12) { m = 1; y += 1; }
-      return { year: y, month: m };
-    });
+    let m = month + delta, y = year;
+    if (m < 1) { m = 12; y -= 1; }
+    if (m > 12) { m = 1; y += 1; }
+    setYm({ year: y, month: m });
+    setSelectedDay(`${y}-${pad(m)}-01`);
+    setPickName(null);
   };
 
   const byDate = useMemo(() => {
@@ -103,22 +118,22 @@ export default function AdminEscalaScreen() {
     return arr;
   }, [year, month, ms]);
 
-  const openDay = (iso: string) => {
+  const selectDay = (iso: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setDayModal(iso);
+    setSelectedDay(iso);
     setPickName(null);
   };
 
-  const dayEntries = dayModal ? byDate.get(dayModal) || [] : [];
+  const dayEntries = byDate.get(selectedDay) || [];
   const availableStaff = staff.filter((s) => !dayEntries.some((e) => e.cpf === s.cpf));
 
   const addToDay = async () => {
-    if (!dayModal || !pickName) return;
+    if (!pickName) return;
     const person = staff.find((s) => s.name === pickName);
     if (!person) return;
     setSaving(true);
     try {
-      const created = await api.createEscala({ date: dayModal, cpf: person.cpf });
+      const created = await api.createEscala({ date: selectedDay, cpf: person.cpf });
       setEntries((prev) => [...prev, created]);
       setPickName(null);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -175,6 +190,17 @@ export default function AdminEscalaScreen() {
         <View style={styles.center}><ActivityIndicator color={colors.brandPrimary} /></View>
       ) : (
         <ScrollView contentContainerStyle={styles.content}>
+          {staff.length > 0 ? (
+            <View style={styles.legendWrap} testID="escala-color-legend">
+              {staff.map((s) => (
+                <View key={s.cpf} style={styles.legendChip}>
+                  <View style={[styles.legendChipDot, { backgroundColor: colorForCpf(s.cpf) }]} />
+                  <Text style={styles.legendChipText}>{firstName(s.name)}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+
           <View style={styles.weekHead}>
             {WEEKDAY_HEAD.map((w, i) => (
               <Text key={i} style={styles.weekHeadText}>{w}</Text>
@@ -184,18 +210,20 @@ export default function AdminEscalaScreen() {
             {cells.map((iso, i) => {
               if (!iso) return <View key={`blank-${i}`} style={styles.dayCellEmpty} />;
               const list = byDate.get(iso) || [];
-              const isToday = iso === todayISO;
+              const isToday = iso === today;
+              const isSelected = iso === selectedDay;
               return (
                 <Pressable
                   key={iso}
                   testID={`escala-day-${iso}`}
-                  onPress={() => openDay(iso)}
-                  style={[styles.dayCell, isToday && styles.dayCellToday]}
+                  onPress={() => selectDay(iso)}
+                  style={[styles.dayCell, isToday && styles.dayCellToday, isSelected && styles.dayCellSelected]}
                 >
                   <Text style={[styles.dayNum, isToday && styles.dayNumToday]}>{parseInt(iso.split('-')[2], 10)}</Text>
                   <View style={styles.dayChips}>
                     {list.slice(0, 2).map((e) => (
                       <View key={e.id} style={styles.dayChip}>
+                        <View style={[styles.dayChipDot, { backgroundColor: colorForCpf(e.cpf) }]} />
                         <Text style={styles.dayChipText} numberOfLines={1}>{firstName(e.user_name)}</Text>
                       </View>
                     ))}
@@ -206,63 +234,57 @@ export default function AdminEscalaScreen() {
             })}
           </View>
 
-          <View style={styles.legendRow}>
-            <View style={styles.legendDot} />
-            <Text style={styles.legendText}>Hoje</Text>
-          </View>
-        </ScrollView>
-      )}
-
-      <Modal visible={!!dayModal} transparent animationType="fade" onRequestClose={() => setDayModal(null)}>
-        <View style={styles.backdrop}>
-          <View style={styles.formCard}>
-            <Text style={styles.formTitle}>{dayModal ? labelForDay(dayModal) : ''}</Text>
+          <View style={styles.selectedPanel} testID="escala-selected-panel">
+            <Text style={styles.selectedTitle}>{labelForDay(selectedDay)}</Text>
 
             {dayEntries.length === 0 ? (
               <Text style={styles.emptyLine}>Nenhum funcionário escalado nesse dia.</Text>
             ) : (
-              <ScrollView style={{ maxHeight: 220, marginBottom: spacing.md }}>
-                {dayEntries.map((e) => (
-                  <View key={e.id} style={styles.escalaRow} testID={`escala-entry-${e.id}`}>
-                    <View style={styles.escalaAvatar}><Ionicons name="person" size={16} color="#4D7C0F" /></View>
-                    <Text style={styles.escalaName}>{e.user_name}</Text>
-                    <Pressable testID={`remove-escala-${e.id}`} onPress={() => removeFromDay(e)} hitSlop={10}>
-                      <Ionicons name="close-circle" size={20} color={colors.error} />
-                    </Pressable>
-                  </View>
-                ))}
-              </ScrollView>
+              dayEntries.map((e) => (
+                <View key={e.id} style={styles.escalaRow} testID={`escala-entry-${e.id}`}>
+                  <View style={[styles.colorDot, { backgroundColor: colorForCpf(e.cpf) }]} />
+                  <Text style={styles.escalaName}>{e.user_name}</Text>
+                  <Pressable testID={`remove-escala-${e.id}`} onPress={() => removeFromDay(e)} hitSlop={10}>
+                    <Ionicons name="close-circle" size={20} color={colors.error} />
+                  </Pressable>
+                </View>
+              ))
             )}
 
             {availableStaff.length === 0 ? (
               <Text style={styles.emptyLine}>{staff.length === 0 ? 'Nenhum funcionário cadastrado.' : 'Todos os funcionários já estão escalados nesse dia.'}</Text>
             ) : (
-              <SelectField
-                testID="escala-pick-staff"
-                label="Adicionar funcionário"
-                value={pickName}
-                options={availableStaff.map((s) => s.name)}
-                onChange={setPickName}
-                placeholder="Selecione um funcionário"
-              />
+              <>
+                <View style={{ marginTop: spacing.sm }}>
+                  <SelectField
+                    testID="escala-pick-staff"
+                    label="Adicionar funcionário"
+                    value={pickName}
+                    options={availableStaff.map((s) => s.name)}
+                    onChange={setPickName}
+                    placeholder="Selecione um funcionário"
+                  />
+                </View>
+                <Pressable
+                  testID="escala-add-button"
+                  onPress={addToDay}
+                  disabled={!pickName || saving}
+                  style={[styles.addBtn, (!pickName || saving) && { opacity: 0.5 }]}
+                >
+                  {saving ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <Ionicons name="add" size={18} color="#FFFFFF" />
+                      <Text style={styles.addBtnText}>Escalar</Text>
+                    </>
+                  )}
+                </Pressable>
+              </>
             )}
-
-            <View style={styles.formActions}>
-              <Pressable testID="escala-modal-close" onPress={() => setDayModal(null)} style={[styles.formBtn, styles.formBtnCancel]}>
-                <Text style={styles.formBtnTextCancel}>Fechar</Text>
-              </Pressable>
-              <Pressable
-                testID="escala-add-button"
-                onPress={addToDay}
-                disabled={!pickName || saving}
-                style={[styles.formBtn, styles.formBtnPrimary, (!pickName || saving) && { opacity: 0.5 }]}
-              >
-                {saving ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.formBtnTextSolid}>Escalar</Text>}
-              </Pressable>
-            </View>
           </View>
-        </View>
-      </Modal>
+        </ScrollView>
+      )}
 
       <AppDialog visible={!!dialog} title={dialog?.title || ''} message={dialog?.message} buttons={dialog?.buttons || []} onRequestClose={closeDialog} testID="escala-dialog" />
     </SafeAreaView>
@@ -279,6 +301,10 @@ const styles = StyleSheet.create({
   monthLabel: { color: colors.onSurface, fontSize: typography.lg, fontWeight: '700', textTransform: 'capitalize' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   content: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xxxl },
+  legendWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.lg },
+  legendChip: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: colors.surfaceSecondary, borderRadius: radius.pill, paddingHorizontal: spacing.sm, paddingVertical: 5, borderWidth: 1, borderColor: colors.border },
+  legendChipDot: { width: 9, height: 9, borderRadius: 5 },
+  legendChipText: { color: colors.onSurface, fontSize: typography.sm, fontWeight: '600' },
   weekHead: { flexDirection: 'row' },
   weekHeadText: { width: `${100 / 7}%`, textAlign: 'center', color: colors.onSurfaceTertiary, fontSize: typography.sm, fontWeight: '700', marginBottom: spacing.xs },
   grid: { flexDirection: 'row', flexWrap: 'wrap' },
@@ -291,26 +317,20 @@ const styles = StyleSheet.create({
     padding: 3,
   },
   dayCellToday: { backgroundColor: colors.brandTertiary },
+  dayCellSelected: { borderWidth: 2, borderColor: colors.brandPrimary },
   dayNum: { color: colors.onSurface, fontSize: typography.sm, fontWeight: '700' },
   dayNumToday: { color: colors.onBrandTertiary },
   dayChips: { marginTop: 2, gap: 2 },
-  dayChip: { backgroundColor: colors.brandPrimary, borderRadius: 4, paddingHorizontal: 3, paddingVertical: 1 },
-  dayChipText: { color: colors.onBrandPrimary, fontSize: 9, fontWeight: '700' },
+  dayChip: { flexDirection: 'row', alignItems: 'center', gap: 2, backgroundColor: colors.surface, borderRadius: 4, paddingHorizontal: 2, paddingVertical: 1 },
+  dayChipDot: { width: 5, height: 5, borderRadius: 2.5 },
+  dayChipText: { color: colors.onSurface, fontSize: 8, fontWeight: '700', maxWidth: 34 },
   dayMore: { color: colors.onSurfaceTertiary, fontSize: 9, fontWeight: '700' },
-  legendRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginTop: spacing.lg },
-  legendDot: { width: 12, height: 12, borderRadius: 3, backgroundColor: colors.brandTertiary, borderWidth: 1, borderColor: colors.border },
-  legendText: { color: colors.onSurfaceSecondary, fontSize: typography.sm },
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: spacing.xl },
-  formCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.xl },
-  formTitle: { color: colors.onSurface, fontSize: typography.xl, fontWeight: '800', marginBottom: spacing.lg, textTransform: 'capitalize' },
-  emptyLine: { color: colors.onSurfaceSecondary, fontSize: typography.base, marginBottom: spacing.lg },
-  escalaRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.divider },
-  escalaAvatar: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#ECFCCB', alignItems: 'center', justifyContent: 'center' },
+  selectedPanel: { marginTop: spacing.lg, backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.lg },
+  selectedTitle: { color: colors.onSurface, fontSize: typography.lg, fontWeight: '800', marginBottom: spacing.md, textTransform: 'capitalize' },
+  emptyLine: { color: colors.onSurfaceSecondary, fontSize: typography.base, marginBottom: spacing.sm },
+  escalaRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border },
+  colorDot: { width: 12, height: 12, borderRadius: 6 },
   escalaName: { flex: 1, color: colors.onSurface, fontSize: typography.base, fontWeight: '600' },
-  formActions: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.sm },
-  formBtn: { flex: 1, paddingVertical: spacing.md, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
-  formBtnCancel: { backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border },
-  formBtnTextCancel: { color: colors.onSurfaceSecondary, fontWeight: '700' },
-  formBtnPrimary: { backgroundColor: colors.brandPrimary },
-  formBtnTextSolid: { color: '#FFFFFF', fontWeight: '700' },
+  addBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs, backgroundColor: colors.brandPrimary, borderRadius: radius.md, paddingVertical: spacing.md, marginTop: spacing.sm },
+  addBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: typography.base },
 });
