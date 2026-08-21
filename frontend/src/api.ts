@@ -478,7 +478,7 @@ export type Statement = {
   sent_at: string;
 };
 
-export type FaturaOrder = { id: string; total: number; created_at: string; items: { name: string; qty: number }[] };
+export type FaturaOrder = { id: string; total: number; created_at: string; items: { name: string; price: number; qty: number }[] };
 export type FaturaReboque = { id: string; amount: number; billed_at?: string | null };
 
 export type FaturaBase = {

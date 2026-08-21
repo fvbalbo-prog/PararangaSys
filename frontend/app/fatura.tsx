@@ -55,12 +55,31 @@ export default function FaturaScreen() {
   const generatePdf = async (f: FaturaBase, opts: { id: string; userName: string; sentAt?: string | null }) => {
     try {
       setGeneratingId(opts.id);
-      const orderRows = f.orders
-        .map((o) => `<tr><td>🛒 ${o.items.map((i) => `${i.qty}x ${i.name}`).join(', ')}</td><td class="v">${money(o.total)}</td></tr>`)
+
+      type DetailRow = { date: string; desc: string; qty: number; unit: number; total: number };
+      const rows: DetailRow[] = [];
+      f.orders.forEach((o) => {
+        const d = (o.created_at || '').slice(0, 10);
+        o.items.forEach((i) => {
+          rows.push({ date: d, desc: i.name, qty: i.qty, unit: i.price, total: i.price * i.qty });
+        });
+      });
+      f.reboques.forEach((r) => {
+        const d = (r.billed_at || '').slice(0, 10);
+        rows.push({ date: d, desc: 'Reboque', qty: 1, unit: r.amount, total: r.amount });
+      });
+      rows.sort((a, b) => a.date.localeCompare(b.date));
+
+      const detailRows = rows
+        .map(
+          (r) =>
+            `<tr><td>${brDate(r.date)}</td><td>${r.desc}</td><td class="c">${r.qty}</td><td class="v">${money(r.unit)}</td><td class="v">${money(r.total)}</td></tr>`
+        )
         .join('');
-      const reboqueRows = f.reboques
-        .map((r) => `<tr><td>⚓ Reboque</td><td class="v">${money(r.amount)}</td></tr>`)
-        .join('');
+      const emptyRow = rows.length === 0
+        ? `<tr><td colspan="5" class="empty">Nenhum consumo de conveniência ou reboque neste ciclo.</td></tr>`
+        : '';
+
       const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/>
         <style>
           * { font-family: -apple-system, Helvetica, Arial, sans-serif; }
@@ -72,11 +91,17 @@ export default function FaturaScreen() {
           .meta { display:flex; justify-content:space-between; margin-bottom: 18px; }
           .meta div { font-size: 13px; }
           .meta strong { display:block; color:#94A3B8; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:2px; }
-          table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+          .fee-box { display:flex; justify-content:space-between; align-items:center; background:#F1F5F9; border-radius:8px; padding:12px 16px; margin-bottom:16px; }
+          .fee-box .label { font-size:13px; font-weight:700; }
+          .fee-box .sub { font-size:11px; color:#64748B; margin-top:2px; }
+          .fee-box .val { font-size:16px; font-weight:800; }
+          h3 { font-size: 13px; text-transform:uppercase; letter-spacing:0.5px; color:#64748B; margin: 18px 0 4px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 4px; }
           th { background:#0B2545; color:#fff; text-align:left; padding:10px; font-size:12px; }
+          th.c, td.c { text-align:center; }
           th.v, td.v { text-align:right; }
           td { padding:9px 10px; border-bottom:1px solid #E2E8F0; font-size:13px; }
-          tr.fee td { font-weight:700; background:#F1F5F9; }
+          td.empty { text-align:center; color:#94A3B8; font-style:italic; }
           .total { display:flex; justify-content:flex-end; margin-top:18px; }
           .total .box { background:#0B2545; color:#fff; border-radius:8px; padding:14px 22px; text-align:right; }
           .total .box span { display:block; font-size:11px; opacity:0.75; }
@@ -95,12 +120,19 @@ export default function FaturaScreen() {
           <div><strong>Vencimento</strong>${brDate(f.due_date)}</div>
           <div><strong>Enviada em</strong>${opts.sentAt ? new Date(opts.sentAt).toLocaleDateString('pt-BR') : brDate(f.due_date)}</div>
         </div>
+        <div class="fee-box">
+          <div>
+            <div class="label">Mensalidade da lancha ${f.boat_name || ''}</div>
+            <div class="sub">Referente ao período de ${brDate(f.period_start)} a ${brDate(f.period_end)}</div>
+          </div>
+          <div class="val">${money(f.mensalidade)}</div>
+        </div>
+        <h3>Consumo detalhado (conveniência e reboque)</h3>
         <table>
-          <thead><tr><th>Descrição</th><th class="v">Valor</th></tr></thead>
+          <thead><tr><th>Data</th><th>Item</th><th class="c">Qtd</th><th class="v">Valor unit.</th><th class="v">Valor</th></tr></thead>
           <tbody>
-            <tr class="fee"><td>Mensalidade da lancha ${f.boat_name || ''}</td><td class="v">${money(f.mensalidade)}</td></tr>
-            ${orderRows}
-            ${reboqueRows}
+            ${detailRows}
+            ${emptyRow}
           </tbody>
         </table>
         <div class="total">
