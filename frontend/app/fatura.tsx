@@ -4,13 +4,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Print from 'expo-print';
-import * as Sharing from 'expo-sharing';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { formatMoney as money } from '@/src/format';
 import { api } from '@/src/api';
 import type { User, FaturaPreview, Fatura } from '@/src/api';
 import { LOGO_PNG_BASE64 } from '@/src/logoBase64';
+import { printHtml } from '@/src/printHtml';
 
 function brDate(iso?: string | null) {
   if (!iso) return '—';
@@ -183,12 +182,7 @@ export default function FaturaScreen() {
         <p class="foot">Marina Pararanga — Documento gerado automaticamente em ${new Date().toLocaleString('pt-BR')}.</p>
         </body></html>`;
 
-      const { uri } = await Print.printToFileAsync({ html });
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: `Fatura ${f.boat_name || ''}` });
-      } else {
-        await Print.printAsync({ uri });
-      }
+      await printHtml(html, `Fatura ${f.boat_name || ''}`);
     } catch {
       Alert.alert('Erro', 'Não foi possível gerar o PDF da fatura.');
     } finally {

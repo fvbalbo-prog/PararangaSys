@@ -16,8 +16,7 @@ import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
-import * as Print from 'expo-print';
-import * as Sharing from 'expo-sharing';
+import { printHtml } from '@/src/printHtml';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { api, boatName, fileUrl, PRODUCT_CATEGORIES } from '@/src/api';
 import type { User, Product, ConvenienceOrder } from '@/src/api';
@@ -86,12 +85,7 @@ export default function ConvenienciaScreen() {
         ${o.observation ? `<p>Obs.: ${o.observation}</p>` : ''}
         <p class="foot">Status: ${STATUS_LABEL[o.status] || o.status}. Documento gerado pelo app da marina.</p>
         </body></html>`;
-      const { uri } = await Print.printToFileAsync({ html });
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Comprovante do pedido' });
-      } else {
-        await Print.printAsync({ uri });
-      }
+      await printHtml(html, 'Comprovante do pedido');
     } catch {
       setDialog({ title: 'Erro', message: 'Não foi possível gerar o comprovante.', buttons: [{ label: 'OK', variant: 'primary', onPress: closeDialog }] });
     } finally {

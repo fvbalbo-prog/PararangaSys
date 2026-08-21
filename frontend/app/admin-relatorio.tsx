@@ -4,8 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import * as Print from 'expo-print';
-import * as Sharing from 'expo-sharing';
+import { printHtml } from '@/src/printHtml';
 import { Alert } from 'react-native';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { api } from '@/src/api';
@@ -94,12 +93,7 @@ export default function AdminRelatorioScreen() {
         </table>
         <p class="foot">Gerado em ${new Date().toLocaleString('pt-BR')}.</p>
       </body></html>`;
-      const { uri } = await Print.printToFileAsync({ html });
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Relatório de consumo' });
-      } else {
-        await Print.printAsync({ uri });
-      }
+      await printHtml(html, 'Relatório de consumo');
     } catch {
       Alert.alert('Erro', 'Não foi possível gerar o PDF.');
     }
