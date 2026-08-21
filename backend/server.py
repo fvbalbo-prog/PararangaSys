@@ -1931,6 +1931,56 @@ async def relatorio_ponto(date_from: str, date_to: str, cpf: Optional[str] = Non
     return {"date_from": date_from, "date_to": date_to, "employees": employees}
 
 
+# ===================== Escala de Trabalho =====================
+class EscalaInput(BaseModel):
+    date: str  # YYYY-MM-DD
+    cpf: str
+    observation: Optional[str] = None
+
+
+@api_router.post("/escala", dependencies=[Depends(require_admin)])
+async def create_escala(payload: EscalaInput):
+    cpf = normalize_cpf(payload.cpf)
+    user = await db.users.find_one({"cpf": cpf, "is_staff": True}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Funcionário não encontrado.")
+    existing = await db.escalas.find_one({"date": payload.date, "cpf": cpf})
+    if existing:
+        raise HTTPException(status_code=409, detail="Funcionário já escalado nesse dia.")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "date": payload.date,
+        "cpf": cpf,
+        "user_name": user["name"],
+        "observation": (payload.observation or "").strip() or None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.escalas.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/escala", dependencies=[Depends(require_staff)])
+async def list_escala(month: Optional[str] = None, cpf: Optional[str] = None):
+    """Acessível pra staff e admin (leitura) — a página de funcionários usa
+    isso só pra visualização, sem opção de editar."""
+    query: dict = {}
+    if month:
+        query["date"] = {"$regex": f"^{month}"}
+    if cpf:
+        query["cpf"] = normalize_cpf(cpf)
+    docs = await db.escalas.find(query, {"_id": 0}).sort("date", 1).to_list(2000)
+    return docs
+
+
+@api_router.delete("/escala/{eid}", dependencies=[Depends(require_admin)])
+async def delete_escala(eid: str):
+    res = await db.escalas.delete_one({"id": eid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Escala não encontrada.")
+    return {"ok": True}
+
+
 # ===================== Painel Financeiro (Contas a Pagar / Receber) =====================
 FINANCEIRO_CATEGORIES_PAGAR = ["Fornecedores", "Manutenção", "Salários", "Utilidades", "Impostos", "Outros"]
 FINANCEIRO_CATEGORIES_RECEBER = ["Mensalidade", "Reboque", "Conveniência", "Serviços", "Outros"]

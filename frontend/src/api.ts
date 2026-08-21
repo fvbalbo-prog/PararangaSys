@@ -256,6 +256,17 @@ export const api = {
     if (cpf) qs.set('cpf', cpf);
     return req<PontoRelatorio>(`/ponto/relatorio?${qs.toString()}`);
   },
+  // Escala de Trabalho
+  createEscala: (data: { date: string; cpf: string; observation?: string | null }) =>
+    req<EscalaEntry>('/escala', { method: 'POST', body: JSON.stringify(data) }),
+  listEscala: (params?: { month?: string; cpf?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.month) qs.set('month', params.month);
+    if (params?.cpf) qs.set('cpf', params.cpf);
+    const s = qs.toString();
+    return req<EscalaEntry[]>(`/escala${s ? `?${s}` : ''}`);
+  },
+  deleteEscala: (id: string) => req<{ ok: boolean }>(`/escala/${id}`, { method: 'DELETE' }),
   // Painel Financeiro
   financeiroCategorias: () => req<{ pagar: string[]; receber: string[] }>('/financeiro/categorias'),
   createFinanceiro: (data: {
@@ -560,6 +571,15 @@ export type PontoEntry = {
 export type PontoRelatorioDia = { date: string; hours: number } & Partial<Record<PontoType, string>>;
 export type PontoRelatorioFuncionario = { cpf: string; name: string; total_hours: number; days: PontoRelatorioDia[] };
 export type PontoRelatorio = { date_from: string; date_to: string; employees: PontoRelatorioFuncionario[] };
+
+export type EscalaEntry = {
+  id: string;
+  date: string; // YYYY-MM-DD
+  cpf: string;
+  user_name: string;
+  observation?: string | null;
+  created_at: string;
+};
 
 export type FinanceiroKind = 'pagar' | 'receber';
 export type FinanceiroStatus = 'pendente' | 'atrasado' | 'pago';
