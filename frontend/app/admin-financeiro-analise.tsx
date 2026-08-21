@@ -55,18 +55,51 @@ function monthLabel(ym: string) {
   return MONTH_SHORT[parseInt(m, 10) - 1];
 }
 
-function CategoryBar({ item, max, index }: { item: { category: string; total: number }; max: number; index: number }) {
-  const pct = max > 0 ? Math.max((item.total / max) * 100, 4) : 4;
+function CategoryBar({ item, total, index }: { item: { category: string; total: number }; total: number; index: number }) {
+  const pct = total > 0 ? (item.total / total) * 100 : 0;
+  const fillPct = Math.max(pct, 1.5);
   const color = colorFor(item.category, index);
   return (
     <View style={styles.barRow} testID={`analise-cat-${item.category}`}>
       <View style={styles.barLabelRow}>
         <View style={[styles.barDot, { backgroundColor: color }]} />
         <Text style={styles.barLabel} numberOfLines={1}>{item.category}</Text>
+        <Text style={[styles.barPct, { color }]}>{pct.toFixed(1)}%</Text>
         <Text style={styles.barValue}>{formatMoney(item.total)}</Text>
       </View>
       <View style={styles.barTrack}>
-        <View style={[styles.barFill, { width: `${pct}%`, backgroundColor: color }]} />
+        <View style={[styles.barFill, { width: `${fillPct}%`, backgroundColor: color }]} />
+      </View>
+    </View>
+  );
+}
+
+// Barra 100% empilhada — dá o "todo" de uma vez, cada fatia já nasce com o
+// percentual correto (flex proporcional ao total), sem precisar normalizar
+// contra o maior item do grupo.
+function StackedPercentBar({ items, total, testID }: { items: { category: string; total: number }[]; total: number; testID: string }) {
+  if (total <= 0 || items.length === 0) return null;
+  return (
+    <View style={styles.stackWrap} testID={testID}>
+      <View style={styles.stackBar}>
+        {items.map((it, i) => {
+          const pct = (it.total / total) * 100;
+          if (pct <= 0) return null;
+          return <View key={it.category} style={{ flex: pct, backgroundColor: colorFor(it.category, i) }} />;
+        })}
+      </View>
+      <View style={styles.stackLegend}>
+        {items.map((it, i) => {
+          const pct = (it.total / total) * 100;
+          return (
+            <View key={it.category} style={styles.stackLegendItem}>
+              <View style={[styles.barDot, { backgroundColor: colorFor(it.category, i) }]} />
+              <Text style={styles.stackLegendText}>
+                {it.category} <Text style={styles.stackLegendPct}>{pct.toFixed(0)}%</Text>
+              </Text>
+            </View>
+          );
+        })}
       </View>
     </View>
   );
@@ -126,8 +159,6 @@ export default function AdminFinanceiroAnaliseScreen() {
 
   const periodLabel = mode === 'mes' ? labelForMonth(year, month) : mode === 'ano' ? `${year}` : `${dateFrom.split('-').reverse().join('/')} – ${dateTo.split('-').reverse().join('/')}`;
 
-  const maxReceber = data ? Math.max(...data.receber.by_category.map((c) => c.total), 1) : 1;
-  const maxPagar = data ? Math.max(...data.pagar.by_category.map((c) => c.total), 1) : 1;
   const maxMonthValue = data ? Math.max(...data.by_month.flatMap((m) => [m.pagar, m.receber]), 1) : 1;
 
   const showMonthDetail = (m: AnaliseMes) => {
@@ -239,7 +270,10 @@ export default function AdminFinanceiroAnaliseScreen() {
             {data.receber.by_category.length === 0 ? (
               <Text style={styles.emptyText}>Nenhuma receita neste período.</Text>
             ) : (
-              data.receber.by_category.map((c, i) => <CategoryBar key={c.category} item={c} max={maxReceber} index={i} />)
+              <>
+                <StackedPercentBar items={data.receber.by_category} total={data.receber.total} testID="analise-receber-stack" />
+                {data.receber.by_category.map((c, i) => <CategoryBar key={c.category} item={c} total={data.receber.total} index={i} />)}
+              </>
             )}
           </View>
 
@@ -248,7 +282,10 @@ export default function AdminFinanceiroAnaliseScreen() {
             {data.pagar.by_category.length === 0 ? (
               <Text style={styles.emptyText}>Nenhuma despesa neste período.</Text>
             ) : (
-              data.pagar.by_category.map((c, i) => <CategoryBar key={c.category} item={c} max={maxPagar} index={i} />)
+              <>
+                <StackedPercentBar items={data.pagar.by_category} total={data.pagar.total} testID="analise-pagar-stack" />
+                {data.pagar.by_category.map((c, i) => <CategoryBar key={c.category} item={c} total={data.pagar.total} index={i} />)}
+              </>
             )}
           </View>
         </ScrollView>
@@ -299,7 +336,14 @@ const styles = StyleSheet.create({
   barLabelRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   barDot: { width: 10, height: 10, borderRadius: 5 },
   barLabel: { flex: 1, color: colors.onSurface, fontSize: typography.base, fontWeight: '600' },
-  barValue: { color: colors.onSurfaceSecondary, fontSize: typography.sm, fontWeight: '700' },
+  barPct: { fontSize: typography.base, fontWeight: '800', minWidth: 46, textAlign: 'right' },
+  barValue: { color: colors.onSurfaceSecondary, fontSize: typography.sm, fontWeight: '700', minWidth: 84, textAlign: 'right' },
   barTrack: { height: 10, backgroundColor: colors.divider, borderRadius: 5, overflow: 'hidden' },
   barFill: { height: '100%', borderRadius: 5 },
+  stackWrap: { gap: spacing.sm, marginBottom: spacing.xs },
+  stackBar: { flexDirection: 'row', height: 22, borderRadius: radius.sm, overflow: 'hidden', backgroundColor: colors.divider },
+  stackLegend: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
+  stackLegendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  stackLegendText: { color: colors.onSurfaceSecondary, fontSize: typography.sm, fontWeight: '600' },
+  stackLegendPct: { color: colors.onSurface, fontWeight: '800' },
 });
