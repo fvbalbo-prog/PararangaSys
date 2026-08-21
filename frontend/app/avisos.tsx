@@ -15,12 +15,14 @@ function iconFor(kind: string): keyof typeof Ionicons.glyphMap {
   if (kind === 'descida') return 'boat';
   if (kind === 'subida') return 'arrow-up-circle';
   if (kind === 'fatura') return 'receipt';
+  if (kind === 'encomenda') return 'cube';
   return 'notifications';
 }
 function colorFor(kind: string): string {
   if (kind === 'descida') return colors.brandPrimary;
   if (kind === 'subida') return colors.success;
   if (kind === 'fatura') return colors.brandSecondary;
+  if (kind === 'encomenda') return '#0E7490';
   return colors.brandSecondary;
 }
 

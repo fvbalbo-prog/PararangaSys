@@ -2206,6 +2206,16 @@ async def create_encomenda(payload: EncomendaInput):
     }
     await db.encomendas.insert_one(doc)
     doc.pop("_id", None)
+
+    fee_str = f"R$ {taxa:.2f}".replace(".", ",")
+    body_parts = ["Sua encomenda"]
+    if doc["boat_name"]:
+        body_parts.append(f"da lancha {doc['boat_name']}")
+    if doc["description"]:
+        body_parts.append(f'— "{doc["description"]}"')
+    body = " ".join(body_parts) + f" chegou na marina. Taxa de recebimento: {fee_str}."
+    await create_notification(cpf, "Encomenda recebida", body, kind="encomenda", ref_id=doc["id"])
+
     return doc
 
 
