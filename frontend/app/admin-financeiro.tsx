@@ -82,6 +82,8 @@ export default function AdminFinanceiroScreen() {
   const [fClientName, setFClientName] = useState<string | null>(null);
   const [fObservation, setFObservation] = useState('');
   const [fRecurring, setFRecurring] = useState(false);
+  const [fRecurringEndMode, setFRecurringEndMode] = useState<'indefinido' | 'data'>('indefinido');
+  const [fRecurringEndDate, setFRecurringEndDate] = useState<Date | null>(null);
   const [saving, setSaving] = useState(false);
 
   // Detalhe / edição
@@ -181,6 +183,8 @@ export default function AdminFinanceiroScreen() {
     setFClientName(null);
     setFObservation('');
     setFRecurring(false);
+    setFRecurringEndMode('indefinido');
+    setFRecurringEndDate(null);
     setShowForm(true);
   };
 
@@ -190,6 +194,12 @@ export default function AdminFinanceiroScreen() {
     if (amount <= 0) return showInfo('Valor inválido', 'Informe um valor maior que zero.');
     if (!fCategory) return showInfo('Categoria obrigatória', 'Selecione uma categoria.');
     if (!fDueDate) return showInfo('Data obrigatória', 'Selecione a data de vencimento.');
+    if (fRecurring && fRecurringEndMode === 'data' && !fRecurringEndDate) {
+      return showInfo('Data de término obrigatória', 'Selecione até quando a cobrança recorrente deve se repetir, ou escolha "Até cancelar".');
+    }
+    if (fRecurring && fRecurringEndMode === 'data' && fRecurringEndDate && fRecurringEndDate < fDueDate) {
+      return showInfo('Data de término inválida', 'A data de término deve ser depois do primeiro vencimento.');
+    }
     setSaving(true);
     try {
       const client = kind === 'receber' && fClientName ? clients.find((c) => c.name === fClientName) : null;
@@ -203,6 +213,7 @@ export default function AdminFinanceiroScreen() {
         supplier_name: kind === 'pagar' ? fSupplierName : null,
         observation: fObservation.trim() || null,
         recurring: fRecurring,
+        recurring_end_date: fRecurring && fRecurringEndMode === 'data' && fRecurringEndDate ? dateToISO(fRecurringEndDate) : null,
       });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setShowForm(false);
@@ -311,25 +322,27 @@ export default function AdminFinanceiroScreen() {
         <Pressable onPress={() => router.back()} hitSlop={16} testID="back-button">
           <Ionicons name="chevron-back" size={26} color={colors.onSurface} />
         </Pressable>
-        <View style={{ flex: 1 }}>
+        <View style={styles.headerTitleBlock}>
           <Text style={styles.title} testID="admin-financeiro-title">Painel Financeiro</Text>
           <Text style={styles.subtitle}>Contas a pagar e a receber</Text>
         </View>
-        <Pressable onPress={() => router.push('/admin-financeiro-analise')} testID="financeiro-analise-button" style={styles.iconBtn} hitSlop={12}>
-          <Ionicons name="bar-chart-outline" size={22} color={colors.onSurface} />
-        </Pressable>
-        <Pressable onPress={openRecorrencias} testID="financeiro-recorrencias-button" style={styles.iconBtn} hitSlop={12}>
-          <Ionicons name="repeat" size={22} color={colors.onSurface} />
-        </Pressable>
-        <Pressable onPress={() => router.push('/admin-fornecedores')} testID="financeiro-fornecedores-button" style={styles.iconBtn} hitSlop={12}>
-          <Ionicons name="briefcase-outline" size={22} color={colors.onSurface} />
-        </Pressable>
-        <Pressable onPress={() => router.push('/admin-relatorio')} testID="financeiro-faturamento-button" style={styles.iconBtn} hitSlop={12}>
-          <Ionicons name="receipt-outline" size={22} color={colors.onSurface} />
-        </Pressable>
-        <Pressable onPress={openForm} testID="financeiro-add" style={styles.addBtn} hitSlop={12}>
-          <Ionicons name="add" size={24} color="#FFFFFF" />
-        </Pressable>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.headerIconsScroll} contentContainerStyle={styles.headerIconsRow}>
+          <Pressable onPress={() => router.push('/admin-financeiro-analise')} testID="financeiro-analise-button" style={styles.iconBtn} hitSlop={12}>
+            <Ionicons name="bar-chart-outline" size={22} color={colors.onSurface} />
+          </Pressable>
+          <Pressable onPress={openRecorrencias} testID="financeiro-recorrencias-button" style={styles.iconBtn} hitSlop={12}>
+            <Ionicons name="repeat" size={22} color={colors.onSurface} />
+          </Pressable>
+          <Pressable onPress={() => router.push('/admin-fornecedores')} testID="financeiro-fornecedores-button" style={styles.iconBtn} hitSlop={12}>
+            <Ionicons name="briefcase-outline" size={22} color={colors.onSurface} />
+          </Pressable>
+          <Pressable onPress={() => router.push('/admin-relatorio')} testID="financeiro-faturamento-button" style={styles.iconBtn} hitSlop={12}>
+            <Ionicons name="receipt-outline" size={22} color={colors.onSurface} />
+          </Pressable>
+          <Pressable onPress={openForm} testID="financeiro-add" style={styles.addBtn} hitSlop={12}>
+            <Ionicons name="add" size={24} color="#FFFFFF" />
+          </Pressable>
+        </ScrollView>
       </View>
 
       <View style={styles.monthNav}>
@@ -520,6 +533,33 @@ export default function AdminFinanceiroScreen() {
                 </View>
               </Pressable>
 
+              {fRecurring ? (
+                <View style={styles.recurringEndBlock}>
+                  <Text style={styles.fieldLabel}>Repetir até</Text>
+                  <View style={styles.recurringEndToggle}>
+                    <Pressable
+                      testID="financeiro-recurring-end-indefinido"
+                      onPress={() => { setFRecurringEndMode('indefinido'); Haptics.selectionAsync(); }}
+                      style={[styles.recurringEndBtn, fRecurringEndMode === 'indefinido' && styles.recurringEndBtnActive]}
+                    >
+                      <Text style={[styles.recurringEndBtnText, fRecurringEndMode === 'indefinido' && styles.recurringEndBtnTextActive]}>Até cancelar</Text>
+                    </Pressable>
+                    <Pressable
+                      testID="financeiro-recurring-end-data"
+                      onPress={() => { setFRecurringEndMode('data'); Haptics.selectionAsync(); }}
+                      style={[styles.recurringEndBtn, fRecurringEndMode === 'data' && styles.recurringEndBtnActive]}
+                    >
+                      <Text style={[styles.recurringEndBtnText, fRecurringEndMode === 'data' && styles.recurringEndBtnTextActive]}>Período com término</Text>
+                    </Pressable>
+                  </View>
+                  {fRecurringEndMode === 'data' ? (
+                    <View style={{ marginTop: spacing.sm }}>
+                      <DateField testID="financeiro-recurring-end-date" label="Data de término" mode="date" value={fRecurringEndDate} onChange={setFRecurringEndDate} />
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
+
               <View style={styles.formActions}>
                 <Pressable testID="financeiro-form-cancel" onPress={() => setShowForm(false)} style={[styles.formBtn, styles.formBtnCancel]}>
                   <Text style={styles.formBtnTextCancel}>Cancelar</Text>
@@ -629,6 +669,7 @@ export default function AdminFinanceiroScreen() {
                         {r.client_name ? ` · ${r.client_name}` : ''}
                         {r.supplier_name ? ` · ${r.supplier_name}` : ''}
                       </Text>
+                      <Text style={styles.entryMeta}>{r.end_date ? `Até ${brDate(r.end_date)}` : 'Até cancelar'}</Text>
                     </View>
                     <Pressable testID={`recorrencia-toggle-${r.id}`} onPress={() => toggleRecorrencia(r)} hitSlop={8} style={{ padding: spacing.xs }}>
                       <Ionicons name={r.active ? 'pause-circle-outline' : 'play-circle-outline'} size={24} color={r.active ? colors.brandPrimary : colors.success} />
@@ -662,6 +703,9 @@ export default function AdminFinanceiroScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.surface },
   header: { flexDirection: 'row', alignItems: 'center', padding: spacing.lg, gap: spacing.md },
+  headerTitleBlock: { marginRight: spacing.md },
+  headerIconsScroll: { flex: 1 },
+  headerIconsRow: { flexDirection: 'row', alignItems: 'center', paddingRight: spacing.xs },
   title: { color: colors.onSurface, fontSize: typography.xxl, fontWeight: '800' },
   subtitle: { color: colors.onSurfaceSecondary, fontSize: typography.sm, marginTop: 2 },
   addBtn: { width: 40, height: 40, borderRadius: radius.pill, backgroundColor: colors.brandPrimary, alignItems: 'center', justifyContent: 'center' },
@@ -671,6 +715,12 @@ const styles = StyleSheet.create({
   recurringSub: { color: colors.onSurfaceSecondary, fontSize: typography.sm, marginTop: 2 },
   recurringTag: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: spacing.sm },
   recurringTagText: { color: colors.brandSecondary, fontSize: typography.sm, fontWeight: '700' },
+  recurringEndBlock: { marginTop: spacing.md },
+  recurringEndToggle: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs },
+  recurringEndBtn: { flex: 1, paddingVertical: spacing.sm, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceSecondary, alignItems: 'center' },
+  recurringEndBtnActive: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
+  recurringEndBtnText: { color: colors.onSurfaceSecondary, fontSize: typography.sm, fontWeight: '700' },
+  recurringEndBtnTextActive: { color: colors.onBrandPrimary },
   recorrenciaRow: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
     paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.divider,

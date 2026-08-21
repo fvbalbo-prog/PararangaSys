@@ -1947,6 +1947,7 @@ class FinanceiroInput(BaseModel):
     observation: Optional[str] = None
     recurring: bool = False              # ex.: mensalidade da lancha, cobrada todo mês
     recurring_day: Optional[int] = None  # dia do vencimento em cada mês; default = dia de due_date
+    recurring_end_date: Optional[str] = None  # YYYY-MM-DD; None = recorrente até cancelar
 
 
 class FinanceiroUpdate(BaseModel):
@@ -1996,6 +1997,9 @@ async def create_financeiro(payload: FinanceiroInput):
         day = payload.recurring_day or due_day
         if not (1 <= day <= 31):
             raise HTTPException(status_code=400, detail="Dia de cobrança deve estar entre 1 e 31.")
+        end_date = (payload.recurring_end_date or "").strip() or None
+        if end_date and end_date < payload.due_date:
+            raise HTTPException(status_code=400, detail="Data de término deve ser depois do vencimento inicial.")
         rule = {
             "id": str(uuid.uuid4()),
             "kind": payload.kind,
@@ -2003,6 +2007,7 @@ async def create_financeiro(payload: FinanceiroInput):
             "category": payload.category,
             "amount": round(payload.amount, 2),
             "day": day,
+            "end_date": end_date,  # None = recorrente até cancelar
             "cpf": cpf,
             "client_name": client_name,
             "supplier_name": supplier_name,
@@ -2062,13 +2067,17 @@ async def _generate_recurring_for_month(month: str):
         if r["id"] in have:
             continue
         day = min(r["day"], _days_in_month(year, mon))
+        due_date = f"{month}-{day:02d}"
+        end_date = r.get("end_date")
+        if end_date and due_date > end_date:
+            continue  # ciclo já passou da data de término da recorrência
         doc = {
             "id": str(uuid.uuid4()),
             "kind": r["kind"],
             "description": r["description"],
             "category": r["category"],
             "amount": r["amount"],
-            "due_date": f"{month}-{day:02d}",
+            "due_date": due_date,
             "cpf": r.get("cpf"),
             "client_name": r.get("client_name"),
             "supplier_name": r.get("supplier_name"),

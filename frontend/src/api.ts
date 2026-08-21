@@ -269,6 +269,7 @@ export const api = {
     observation?: string | null;
     recurring?: boolean;
     recurring_day?: number;
+    recurring_end_date?: string | null;
   }) => req<FinanceiroEntry>('/financeiro', { method: 'POST', body: JSON.stringify(data) }),
   listFinanceiro: (params?: { kind?: FinanceiroKind; status?: FinanceiroStatus; month?: string }) => {
     const qs = new URLSearchParams();
@@ -632,6 +633,7 @@ export type Recorrencia = {
   category: string;
   amount: number;
   day: number;
+  end_date?: string | null; // YYYY-MM-DD; null/ausente = recorrente até cancelar
   cpf?: string | null;
   client_name?: string | null;
   supplier_name?: string | null;
