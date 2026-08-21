@@ -412,14 +412,17 @@ def validate_request_payload(payload: RequestBase):
 
 
 # ===================== Routes =====================
-async def create_notification(cpf: str, title: str, body: str, kind: str = "info"):
-    """In-app notification for a client (no push)."""
+async def create_notification(cpf: str, title: str, body: str, kind: str = "info", ref_id: Optional[str] = None):
+    """In-app notification for a client (no push). ref_id opcionalmente
+    aponta pro registro relacionado (ex.: id da fatura), pra a tela de
+    avisos poder abrir o destino certo ao tocar na notificação."""
     doc = {
         "id": str(uuid.uuid4()),
         "cpf": normalize_cpf(cpf),
         "title": title,
         "body": body,
         "kind": kind,
+        "ref_id": ref_id,
         "read": False,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -1657,6 +1660,7 @@ async def _build_fatura(cpf: str, boat: dict, due_date: date_cls) -> dict:
 
     order_q = {
         "cpf": cpf,
+        "boat_name": boat.get("name"),
         "status": {"$ne": "cancelada"},
         "created_at": {"$gte": start_iso, "$lt": f"{end_iso}T23:59:59.999999"},
     }
@@ -1745,6 +1749,7 @@ async def _maybe_send_faturas(cpf: str, user_name: str, boats: list):
             "Fatura disponível",
             f"Sua fatura da lancha {b.get('name')} (venc. {due_date.strftime('%d/%m/%Y')}) já está disponível.",
             kind="fatura",
+            ref_id=fatura["id"],
         )
 
 
@@ -2435,7 +2440,10 @@ SEED_USERS = [
 @app.on_event("startup")
 async def seed_users():
     for u in SEED_USERS:
-        await db.users.update_one({"cpf": u["cpf"]}, {"$set": u}, upsert=True)
+        # $setOnInsert (não $set): só grava os dados de seed na primeira vez
+        # que o usuário é criado — em restarts seguintes não pisa em cima de
+        # edições feitas pelo admin (lanchas, mensalidade, telefone, etc.).
+        await db.users.update_one({"cpf": u["cpf"]}, {"$setOnInsert": u}, upsert=True)
     for p in SEED_PRODUCTS:
         on_insert = {k: v for k, v in p.items() if k != "category"}
         await db.products.update_one(

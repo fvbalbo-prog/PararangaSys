@@ -366,6 +366,7 @@ export type AppNotification = {
   title: string;
   body: string;
   kind: string;
+  ref_id?: string | null;
   read: boolean;
   created_at: string;
 };
