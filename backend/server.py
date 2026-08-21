@@ -1938,6 +1938,69 @@ class EscalaInput(BaseModel):
     observation: Optional[str] = None
 
 
+def _week_bounds_sunday(iso_date: str) -> tuple:
+    """Semana domingo-sábado que contém a data (mesmo agrupamento usado na
+    grade do calendário no app)."""
+    d = date_cls.fromisoformat(iso_date)
+    dow = (d.weekday() + 1) % 7  # Python: seg=0..dom=6 → aqui dom=0..sáb=6
+    start = d - timedelta(days=dow)
+    end = start + timedelta(days=6)
+    return start, end
+
+
+def _sundays_in_month(year: int, month: int) -> List[str]:
+    total = _days_in_month(year, month)
+    return [
+        date_cls(year, month, day).isoformat()
+        for day in range(1, total + 1)
+        if date_cls(year, month, day).weekday() == 6
+    ]
+
+
+async def _validate_escala_rules(cpf: str, iso_date: str, user_name: str):
+    """Regras de escala do funcionário:
+    - Máximo 6 dias trabalhados por semana (domingo-sábado).
+    - A escala deve intercalar semanas de 6 e 5 dias: depois de uma semana
+      de 6 dias, a semana seguinte não pode passar de 5.
+    - Cada funcionário precisa folgar em pelo menos 1 domingo por mês —
+      bloqueia escalar o último domingo do mês ainda livre."""
+    target = date_cls.fromisoformat(iso_date)
+    week_start, week_end = _week_bounds_sunday(iso_date)
+
+    current_week_count = await db.escalas.count_documents(
+        {"cpf": cpf, "date": {"$gte": week_start.isoformat(), "$lte": week_end.isoformat()}}
+    )
+    if current_week_count >= 6:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{user_name} já está escalado(a) 6 dias na semana de {week_start.strftime('%d/%m')} a {week_end.strftime('%d/%m')} — esse é o máximo permitido por semana.",
+        )
+
+    prev_week_start = week_start - timedelta(days=7)
+    prev_week_end = week_start - timedelta(days=1)
+    prev_week_count = await db.escalas.count_documents(
+        {"cpf": cpf, "date": {"$gte": prev_week_start.isoformat(), "$lte": prev_week_end.isoformat()}}
+    )
+    if prev_week_count >= 6 and current_week_count >= 5:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{user_name} trabalhou 6 dias na semana de {prev_week_start.strftime('%d/%m')} a {prev_week_end.strftime('%d/%m')} — a escala precisa intercalar, então essa semana não pode passar de 5 dias.",
+        )
+
+    if target.weekday() == 6:
+        sundays = _sundays_in_month(target.year, target.month)
+        other_sundays = [s for s in sundays if s != iso_date]
+        if other_sundays:
+            worked_other_sundays = await db.escalas.count_documents(
+                {"cpf": cpf, "date": {"$in": other_sundays}}
+            )
+            if worked_other_sundays == len(other_sundays):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{user_name} já está escalado(a) em todos os outros domingos de {target.month:02d}/{target.year} — é obrigatório folgar em pelo menos 1 domingo no mês.",
+                )
+
+
 @api_router.post("/escala", dependencies=[Depends(require_admin)])
 async def create_escala(payload: EscalaInput):
     cpf = normalize_cpf(payload.cpf)
@@ -1947,6 +2010,7 @@ async def create_escala(payload: EscalaInput):
     existing = await db.escalas.find_one({"date": payload.date, "cpf": cpf})
     if existing:
         raise HTTPException(status_code=409, detail="Funcionário já escalado nesse dia.")
+    await _validate_escala_rules(cpf, payload.date, user["name"])
     doc = {
         "id": str(uuid.uuid4()),
         "date": payload.date,
