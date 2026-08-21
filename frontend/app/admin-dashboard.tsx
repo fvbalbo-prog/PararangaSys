@@ -7,8 +7,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { formatMoney as money } from '@/src/format';
-import { api } from '@/src/api';
-import type { MarinaRequest, ConvenienceOrder, Emergency } from '@/src/api';
+import { api, isAuthValidOn, authValidityLabel, PONTO_LABELS } from '@/src/api';
+import type { MarinaRequest, ConvenienceOrder, Emergency, FinanceiroEntry, Authorization, PontoEntry, PontoType } from '@/src/api';
 
 function pad(n: number) { return n.toString().padStart(2, '0'); }
 function toISO(d: Date) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
@@ -17,6 +17,12 @@ function labelForDate(d: Date) {
   const weekdays = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
   return `${isToday ? 'Hoje • ' : ''}${weekdays[d.getDay()]}, ${pad(d.getDate())}/${pad(d.getMonth() + 1)}`;
 }
+function brDate(iso?: string | null) {
+  if (!iso) return '—';
+  const [y, m, d] = iso.split('-');
+  return `${d}/${m}/${y}`;
+}
+const PONTO_ORDER: PontoType[] = ['entrada', 'saida_almoco', 'retorno_almoco', 'saida_final'];
 
 export default function AdminDashboardScreen() {
   const router = useRouter();
@@ -24,6 +30,9 @@ export default function AdminDashboardScreen() {
   const [items, setItems] = useState<MarinaRequest[]>([]);
   const [orders, setOrders] = useState<ConvenienceOrder[]>([]);
   const [emergencies, setEmergencies] = useState<Emergency[]>([]);
+  const [contasPagar, setContasPagar] = useState<FinanceiroEntry[]>([]);
+  const [authorizations, setAuthorizations] = useState<Authorization[]>([]);
+  const [pontoHoje, setPontoHoje] = useState<PontoEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -33,14 +42,20 @@ export default function AdminDashboardScreen() {
     const raw = await AsyncStorage.getItem('user');
     if (!raw) return router.replace('/');
     try {
-      const [reqs, ords, emgs] = await Promise.all([
+      const [reqs, ords, emgs, pagar, auths, ponto] = await Promise.all([
         api.dayRequests(iso),
         api.listOrders().catch(() => []),
         api.listEmergencies().catch(() => []),
+        api.listFinanceiro({ kind: 'pagar' }).catch(() => []),
+        api.listAuthorizations().catch(() => []),
+        api.listPonto({ date_from: iso, date_to: iso }).catch(() => []),
       ]);
       setItems(reqs);
       setOrders(ords);
       setEmergencies(emgs);
+      setContasPagar(pagar);
+      setAuthorizations(auths);
+      setPontoHoje(ponto);
     } catch {
       setItems([]);
     } finally {
@@ -98,6 +113,29 @@ export default function AdminDashboardScreen() {
     { label: 'Atrasos', value: atrasos, icon: 'warning', color: colors.error },
     { label: 'Canceladas', value: canceladas, icon: 'close-circle', color: colors.onSurfaceTertiary },
   ];
+
+  const contasPagarAbertas = contasPagar
+    .filter((f) => f.status !== 'pago')
+    .sort((a, b) => a.due_date.localeCompare(b.due_date));
+  const contasPagarTotal = contasPagarAbertas.reduce((s, f) => s + f.amount, 0);
+
+  const autorizacoesHoje = authorizations.filter((a) => a.status === 'ativa' && isAuthValidOn(a, iso));
+
+  const equipeHoje = (() => {
+    const byCpf = new Map<string, { cpf: string; name: string; entries: PontoEntry[] }>();
+    for (const p of pontoHoje) {
+      if (!byCpf.has(p.cpf)) byCpf.set(p.cpf, { cpf: p.cpf, name: p.user_name, entries: [] });
+      byCpf.get(p.cpf)!.entries.push(p);
+    }
+    return Array.from(byCpf.values())
+      .map((e) => {
+        const entries = [...e.entries].sort((a, b) => a.time.localeCompare(b.time));
+        const types = new Set(entries.map((x) => x.type));
+        const working = types.has('entrada') && !types.has('saida_final');
+        return { ...e, entries, working };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  })();
 
   return (
     <SafeAreaView style={styles.root} edges={['top']} testID="admin-dashboard-screen">
@@ -161,6 +199,85 @@ export default function AdminDashboardScreen() {
               <Text style={styles.linkText}>Relatório de cobrança mensal</Text>
               <Ionicons name="chevron-forward" size={18} color={colors.onSurfaceTertiary} />
             </Pressable>
+
+            <Text style={styles.blockKicker}>CONTAS A PAGAR</Text>
+            <View style={styles.panel} testID="dashboard-contas-pagar">
+              <View style={styles.panelHead}>
+                <View style={{ flex: 1 }}>
+                  {contasPagarAbertas.length > 0 ? <Text style={styles.panelSub}>Total em aberto: {money(contasPagarTotal)}</Text> : null}
+                </View>
+                <Pressable onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-financeiro'); }} testID="dashboard-open-financeiro">
+                  <Text style={styles.panelLink}>Ver tudo</Text>
+                </Pressable>
+              </View>
+              {contasPagarAbertas.length === 0 ? (
+                <Text style={styles.emptyLine}>Nenhuma conta a pagar em aberto. 🎉</Text>
+              ) : (
+                contasPagarAbertas.slice(0, 5).map((f) => (
+                  <View key={f.id} style={styles.pagarRow} testID={`dashboard-pagar-${f.id}`}>
+                    <View style={[styles.pagarDot, f.status_display === 'atrasado' && { backgroundColor: colors.error }]} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.rowTitle} numberOfLines={1}>{f.description}</Text>
+                      <Text style={styles.rowMeta}>{f.category} • Venc. {brDate(f.due_date)}</Text>
+                    </View>
+                    <Text style={[styles.pagarValue, f.status_display === 'atrasado' && { color: colors.error }]}>{money(f.amount)}</Text>
+                  </View>
+                ))
+              )}
+            </View>
+
+            <Text style={styles.blockKicker}>AUTORIZAÇÕES VIGENTES HOJE</Text>
+            <View style={styles.panel} testID="dashboard-autorizacoes">
+              {autorizacoesHoje.length === 0 ? (
+                <Text style={styles.emptyLine}>Nenhuma autorização vigente hoje.</Text>
+              ) : (
+                autorizacoesHoje.slice(0, 5).map((a) => (
+                  <View key={a.id} style={styles.authRow} testID={`dashboard-auth-${a.id}`}>
+                    <Ionicons name="shield-checkmark" size={18} color={colors.success} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.rowTitle} numberOfLines={1}>{a.person_name} · {a.boat_name}</Text>
+                      <Text style={styles.rowMeta}>{a.user_name} • {authValidityLabel(a)}</Text>
+                    </View>
+                  </View>
+                ))
+              )}
+            </View>
+
+            <Text style={styles.blockKicker}>EQUIPE</Text>
+            <View style={styles.panel} testID="dashboard-equipe">
+              <View style={styles.panelHead}>
+                <Text style={styles.panelTitle}>Funcionários no dia</Text>
+                <Pressable onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-ponto'); }} testID="dashboard-open-ponto">
+                  <Text style={styles.panelLink}>Ver tudo</Text>
+                </Pressable>
+              </View>
+              {equipeHoje.length === 0 ? (
+                <Text style={styles.emptyLine}>Nenhum ponto registrado hoje ainda.</Text>
+              ) : (
+                equipeHoje.map((emp) => (
+                  <View key={emp.cpf} style={styles.equipeCard} testID={`dashboard-equipe-${emp.cpf}`}>
+                    <View style={styles.equipeHead}>
+                      <View style={[styles.equipeStatusDot, { backgroundColor: emp.working ? colors.success : colors.onSurfaceTertiary }]} />
+                      <Text style={styles.rowTitle}>{emp.name}</Text>
+                    </View>
+                    <Text style={[styles.rowMeta, emp.working && { color: colors.success, fontWeight: '700' }]}>
+                      {emp.working ? 'Trabalhando agora' : 'Expediente encerrado'}
+                    </Text>
+                    <View style={styles.equipePunches}>
+                      {PONTO_ORDER.map((t) => {
+                        const entry = emp.entries.find((e) => e.type === t);
+                        return (
+                          <View key={t} style={[styles.punchChip, !entry && styles.punchChipEmpty]}>
+                            <Text style={[styles.punchLabel, !entry && styles.punchLabelEmpty]}>{PONTO_LABELS[t]}</Text>
+                            <Text style={[styles.punchTime, !entry && styles.punchLabelEmpty]}>{entry ? entry.time : '—'}</Text>
+                          </View>
+                        );
+                      })}
+                    </View>
+                  </View>
+                ))
+              )}
+            </View>
           </ScrollView>
         )}
       </View>
@@ -192,4 +309,33 @@ const styles = StyleSheet.create({
   statLabel: { color: colors.onSurfaceSecondary, fontSize: typography.sm, fontWeight: '600' },
   linkRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.lg, marginTop: spacing.md },
   linkText: { flex: 1, color: colors.onSurface, fontSize: typography.base, fontWeight: '700' },
+  blockKicker: {
+    color: colors.onSurfaceTertiary,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 1.5,
+    marginBottom: spacing.sm,
+    marginTop: spacing.xl,
+  },
+  panel: { backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.lg },
+  panelHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.xs, gap: spacing.sm },
+  panelTitle: { color: colors.onSurface, fontSize: typography.base, fontWeight: '800', flex: 1 },
+  panelSub: { color: colors.onSurfaceSecondary, fontSize: typography.sm, fontWeight: '600' },
+  panelLink: { color: colors.brandPrimary, fontSize: typography.sm, fontWeight: '700' },
+  emptyLine: { color: colors.onSurfaceSecondary, fontSize: typography.base, paddingVertical: spacing.sm },
+  rowTitle: { color: colors.onSurface, fontSize: typography.base, fontWeight: '700' },
+  rowMeta: { color: colors.onSurfaceSecondary, fontSize: typography.sm, marginTop: 2 },
+  pagarRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.sm, borderTopWidth: 1, borderTopColor: colors.border },
+  pagarDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#B45309' },
+  pagarValue: { color: colors.onSurface, fontSize: typography.base, fontWeight: '800' },
+  authRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.sm, borderTopWidth: 1, borderTopColor: colors.border },
+  equipeCard: { paddingVertical: spacing.md, borderTopWidth: 1, borderTopColor: colors.border },
+  equipeHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  equipeStatusDot: { width: 10, height: 10, borderRadius: 5 },
+  equipePunches: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.sm },
+  punchChip: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, minWidth: 100, alignItems: 'center' },
+  punchChipEmpty: { borderStyle: 'dashed' },
+  punchLabel: { color: colors.onSurfaceSecondary, fontSize: 10, fontWeight: '700', letterSpacing: 0.4, textTransform: 'uppercase' },
+  punchLabelEmpty: { color: colors.onSurfaceTertiary },
+  punchTime: { color: colors.onSurface, fontSize: typography.base, fontWeight: '800', marginTop: 2 },
 });

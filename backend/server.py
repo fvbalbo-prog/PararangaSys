@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Depends, Header
 from fastapi.responses import Response
 from fastapi.concurrency import run_in_threadpool
 from dotenv import load_dotenv
@@ -9,6 +9,8 @@ import re
 import logging
 import httpx
 import requests
+import jwt
+import secrets
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
@@ -24,6 +26,16 @@ def now_br() -> datetime:
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+
+# Logger is configured up-front (previously declared near the bottom of this
+# file, after routes that already referenced it — harmless at runtime since
+# module-level code all runs before any request, but confusing to read and
+# fragile to reorder).
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
@@ -113,11 +125,76 @@ SUBIDA_MIN = time(8, 30)
 SUBIDA_MAX = time(17, 30)
 
 
+# ===================== Auth (JWT) =====================
+# Minimal session layer: /login issues a signed token carrying cpf/is_admin/
+# is_staff; the frontend stores it alongside the user object it already
+# persists and sends it back as "Authorization: Bearer <token>". Endpoints
+# that only the marina's staff/admin should reach are gated with
+# require_admin / require_staff below. Endpoints reachable by any logged-in
+# client (booking, cancelling, ordering, etc.) are intentionally left open in
+# this pass — see ANALISE_ESTRUTURA.md for the follow-up items.
+JWT_SECRET = os.environ.get("JWT_SECRET", "").strip()
+if not JWT_SECRET:
+    # Random per-process secret rather than a fixed fallback: anyone who reads
+    # this source (it's public) would otherwise be able to forge admin tokens
+    # against any instance that forgets to set JWT_SECRET. The tradeoff is
+    # that restarting the process invalidates all existing sessions, which is
+    # acceptable outside of production and forces production to set the
+    # env var instead of silently running on a guessable key.
+    JWT_SECRET = secrets.token_hex(32)
+    logger.warning(
+        "JWT_SECRET não definido — usando chave aleatória gerada para este "
+        "processo (sessões existentes invalidam a cada restart). Defina "
+        "JWT_SECRET em produção para manter sessões estáveis entre deploys."
+    )
+JWT_ALG = "HS256"
+JWT_EXPIRE_DAYS = 30
+
+
+def create_token(user: dict) -> str:
+    now = datetime.now(timezone.utc)
+    payload = {
+        "cpf": user.get("cpf"),
+        "is_admin": bool(user.get("is_admin")),
+        "is_staff": bool(user.get("is_staff")),
+        "iat": now,
+        "exp": now + timedelta(days=JWT_EXPIRE_DAYS),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+
+
+async def get_current_claims(authorization: Optional[str] = Header(None)) -> dict:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Não autenticado. Faça login novamente.")
+    token = authorization.split(" ", 1)[1].strip()
+    try:
+        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Sessão expirada. Faça login novamente.")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Sessão inválida. Faça login novamente.")
+
+
+async def require_admin(claims: dict = Depends(get_current_claims)) -> dict:
+    if not claims.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Acesso restrito à administração da marina.")
+    return claims
+
+
+async def require_staff(claims: dict = Depends(get_current_claims)) -> dict:
+    if not (claims.get("is_admin") or claims.get("is_staff")):
+        raise HTTPException(status_code=403, detail="Acesso restrito à equipe da marina.")
+    return claims
+
+
 # ===================== Models =====================
 class Boat(BaseModel):
     name: str
     draft: Optional[float] = None   # calado em metros
     length: Optional[float] = None  # comprimento em pés
+    monthly_fee: Optional[float] = None            # valor da mensalidade (R$)
+    monthly_fee_valid_until: Optional[str] = None  # validade do valor, YYYY-MM-DD
+    mensalidade_due_day: Optional[int] = None      # dia do mês (1-31) de vencimento da mensalidade
 
 
 class User(BaseModel):
@@ -229,6 +306,10 @@ async def next_available_slot(req_type: str, date: str, from_time: str) -> Optio
 
 
 async def enforce_capacity(payload: RequestBase, exclude_id: Optional[str] = None):
+    """Fast-fail pre-check: gives a friendly error (with the next open slot)
+    in the common case. Not race-proof by itself — two requests can both pass
+    this check for the same slot before either finishes inserting — so it's
+    paired with reconcile_slot_capacity() after the write actually lands."""
     if is_unlimited_slot(payload.type, payload.time):
         return
     count = await slot_count(payload.type, payload.date, payload.time, exclude_id)
@@ -239,6 +320,35 @@ async def enforce_capacity(payload: RequestBase, exclude_id: Optional[str] = Non
             status_code=409,
             detail=f"Horário {payload.time} lotado (limite de {SLOT_CAPACITY} lanchas).{suffix}",
         )
+
+
+async def reconcile_slot_capacity(req_type: str, date: str, hhmm: str, request_id: str) -> bool:
+    """Post-write guard against the race enforce_capacity can't close on its
+    own (standalone MongoDB here has no multi-document transactions to make
+    the earlier check-then-insert atomic). After a request is written into a
+    slot, re-read every active request in that exact slot ordered by
+    (created_at, id) and keep only the first SLOT_CAPACITY. If `request_id`
+    lost that tie-break, it's auto-cancelled and the caller should report a
+    409 — this bounds the overbooking window to "briefly visible", never
+    permanent, without needing a replica-set transaction."""
+    if is_unlimited_slot(req_type, hhmm):
+        return True
+    docs = await db.requests.find(
+        {"type": req_type, "date": date, "time": hhmm, "status": {"$ne": "cancelada"}},
+        {"_id": 0, "id": 1, "created_at": 1},
+    ).sort([("created_at", 1), ("id", 1)]).to_list(50)
+    keep_ids = {d["id"] for d in docs[:SLOT_CAPACITY]}
+    if request_id in keep_ids:
+        return True
+    await db.requests.update_one(
+        {"id": request_id},
+        {"$set": {
+            "status": "cancelada",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "auto_cancelled_reason": "slot_full_race",
+        }},
+    )
+    return False
 
 
 def validate_request_payload(payload: RequestBase):
@@ -302,14 +412,17 @@ def validate_request_payload(payload: RequestBase):
 
 
 # ===================== Routes =====================
-async def create_notification(cpf: str, title: str, body: str, kind: str = "info"):
-    """In-app notification for a client (no push)."""
+async def create_notification(cpf: str, title: str, body: str, kind: str = "info", ref_id: Optional[str] = None):
+    """In-app notification for a client (no push). ref_id opcionalmente
+    aponta pro registro relacionado (ex.: id da fatura), pra a tela de
+    avisos poder abrir o destino certo ao tocar na notificação."""
     doc = {
         "id": str(uuid.uuid4()),
         "cpf": normalize_cpf(cpf),
         "title": title,
         "body": body,
         "kind": kind,
+        "ref_id": ref_id,
         "read": False,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -335,6 +448,7 @@ async def login(payload: LoginInput):
         if up[-4:] == last4:
             if u.get("active") is False:
                 raise HTTPException(status_code=403, detail="Acesso desativado. Procure a administração da marina.")
+            u["token"] = create_token(u)
             return u
     raise HTTPException(status_code=404, detail="CPF ou celular não confere.")
 
@@ -365,13 +479,21 @@ async def create_request(payload: RequestCreate):
     doc["created_at"] = now_iso
     doc["updated_at"] = now_iso
     await db.requests.insert_one(doc)
+    ok = await reconcile_slot_capacity(payload.type, payload.date, payload.time, doc["id"])
+    if not ok:
+        nxt = await next_available_slot(payload.type, payload.date, payload.time)
+        suffix = f" Próximo horário disponível: {nxt}." if nxt else " Não há horários disponíveis neste dia."
+        raise HTTPException(
+            status_code=409,
+            detail=f"Horário {payload.time} lotado (limite de {SLOT_CAPACITY} lanchas).{suffix}",
+        )
     doc.pop("_id", None)
     return doc
 
 
 @api_router.get("/requests/today", response_model=List[RequestOut])
 async def get_today_requests(type: Optional[str] = None, cpf: Optional[str] = None):
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = now_br().strftime("%Y-%m-%d")
     query = {"date": today}
     if type in ("descida", "subida"):
         query["type"] = type
@@ -396,7 +518,7 @@ async def get_history(cpf: str):
 @api_router.get("/requests/day", response_model=List[RequestOut])
 async def get_day_requests(date: Optional[str] = None, type: Optional[str] = None):
     """All requests for a specific day (admin panel). Defaults to today."""
-    day = date or datetime.now().strftime("%Y-%m-%d")
+    day = date or now_br().strftime("%Y-%m-%d")
     query = {"date": day}
     if type in ("descida", "subida"):
         query["type"] = type
@@ -437,7 +559,11 @@ async def update_request(request_id: str, payload: RequestUpdate):
     if not existing:
         raise HTTPException(status_code=404, detail="Solicitação não encontrada.")
 
-    update_data = {k: v for k, v in payload.dict().items() if v is not None}
+    # exclude_unset (not "filter out None") so a field explicitly sent as
+    # null actually clears it — filtering on `v is not None` made it
+    # impossible to ever erase e.g. an observation via PUT, since an omitted
+    # field and an intentionally-cleared field looked identical.
+    update_data = payload.dict(exclude_unset=True)
     merged = {**existing, **update_data}
     # Re-validate merged
     revalidated = RequestBase(**{k: merged.get(k) for k in RequestBase.__fields__.keys()})
@@ -445,6 +571,15 @@ async def update_request(request_id: str, payload: RequestUpdate):
     await enforce_capacity(revalidated, exclude_id=request_id)
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     await db.requests.update_one({"id": request_id}, {"$set": update_data})
+    if "time" in update_data or "date" in update_data:
+        ok = await reconcile_slot_capacity(revalidated.type, revalidated.date, revalidated.time, request_id)
+        if not ok:
+            nxt = await next_available_slot(revalidated.type, revalidated.date, revalidated.time)
+            suffix = f" Próximo horário disponível: {nxt}." if nxt else " Não há horários disponíveis neste dia."
+            raise HTTPException(
+                status_code=409,
+                detail=f"Horário {revalidated.time} lotado (limite de {SLOT_CAPACITY} lanchas).{suffix}",
+            )
     doc = await db.requests.find_one({"id": request_id}, {"_id": 0})
     return doc
 
@@ -474,7 +609,7 @@ async def confirm_return(request_id: str):
     return await db.requests.find_one({"id": request_id}, {"_id": 0})
 
 
-@api_router.patch("/requests/{request_id}/complete", response_model=RequestOut)
+@api_router.patch("/requests/{request_id}/complete", response_model=RequestOut, dependencies=[Depends(require_staff)])
 async def complete_request(request_id: str):
     """Admin marks a descida/subida as completed (concluída)."""
     existing = await db.requests.find_one({"id": request_id}, {"_id": 0})
@@ -528,7 +663,7 @@ async def read_all_notifications(cpf: str):
     return {"ok": True}
 
 
-@api_router.patch("/requests/{request_id}/reopen", response_model=RequestOut)
+@api_router.patch("/requests/{request_id}/reopen", response_model=RequestOut, dependencies=[Depends(require_staff)])
 async def reopen_request(request_id: str):
     """Staff correction: revert a completed request back to 'aguardando'."""
     existing = await db.requests.find_one({"id": request_id}, {"_id": 0})
@@ -639,6 +774,17 @@ class BoatInput(BaseModel):
     name: str
     draft: Optional[float] = None
     length: Optional[float] = None
+    monthly_fee: Optional[float] = None
+    monthly_fee_valid_until: Optional[str] = None
+    mensalidade_due_day: Optional[int] = None
+
+
+class BoatUpdate(BaseModel):
+    draft: Optional[float] = None
+    length: Optional[float] = None
+    monthly_fee: Optional[float] = None
+    monthly_fee_valid_until: Optional[str] = None
+    mensalidade_due_day: Optional[int] = None
 
 
 def _boat_name(b) -> str:
@@ -646,7 +792,7 @@ def _boat_name(b) -> str:
     return b if isinstance(b, str) else (b.get("name") if isinstance(b, dict) else "")
 
 
-@api_router.get("/users", response_model=List[User])
+@api_router.get("/users", response_model=List[User], dependencies=[Depends(require_admin)])
 async def list_users():
     docs = await db.users.find(
         {"is_admin": {"$ne": True}}, {"_id": 0}
@@ -657,7 +803,7 @@ async def list_users():
     return docs
 
 
-@api_router.post("/users", response_model=User)
+@api_router.post("/users", response_model=User, dependencies=[Depends(require_admin)])
 async def create_client(payload: ClientInput):
     cpf = normalize_cpf(payload.cpf)
     if len(cpf) != 11:
@@ -685,7 +831,7 @@ class ActiveInput(BaseModel):
     active: bool
 
 
-@api_router.patch("/users/{cpf}/active", response_model=User)
+@api_router.patch("/users/{cpf}/active", response_model=User, dependencies=[Depends(require_admin)])
 async def set_user_active(cpf: str, payload: ActiveInput):
     cpf_clean = normalize_cpf(cpf)
     res = await db.users.update_one({"cpf": cpf_clean}, {"$set": {"active": payload.active}})
@@ -696,7 +842,7 @@ async def set_user_active(cpf: str, payload: ActiveInput):
     return u
 
 
-@api_router.post("/users/{cpf}/boats", response_model=User)
+@api_router.post("/users/{cpf}/boats", response_model=User, dependencies=[Depends(require_admin)])
 async def add_boat(cpf: str, payload: BoatInput):
     cpf_clean = normalize_cpf(cpf)
     user = await db.users.find_one({"cpf": cpf_clean}, {"_id": 0})
@@ -708,7 +854,14 @@ async def add_boat(cpf: str, payload: BoatInput):
     boats = [b if isinstance(b, dict) else {"name": b} for b in user.get("boats", [])]
     if any(_boat_name(b) == name for b in boats):
         raise HTTPException(status_code=409, detail="Lancha já cadastrada.")
-    boats.append({"name": name, "draft": payload.draft, "length": payload.length})
+    boats.append({
+        "name": name,
+        "draft": payload.draft,
+        "length": payload.length,
+        "monthly_fee": payload.monthly_fee,
+        "monthly_fee_valid_until": payload.monthly_fee_valid_until,
+        "mensalidade_due_day": payload.mensalidade_due_day,
+    })
     update = {"boats": boats}
     if not user.get("boat_name"):
         update["boat_name"] = name
@@ -716,7 +869,24 @@ async def add_boat(cpf: str, payload: BoatInput):
     return await db.users.find_one({"cpf": cpf_clean}, {"_id": 0})
 
 
-@api_router.delete("/users/{cpf}/boats", response_model=User)
+@api_router.put("/users/{cpf}/boats/{name}", response_model=User, dependencies=[Depends(require_admin)])
+async def update_boat(cpf: str, name: str, payload: BoatUpdate):
+    cpf_clean = normalize_cpf(cpf)
+    user = await db.users.find_one({"cpf": cpf_clean}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+    boats = [b if isinstance(b, dict) else {"name": b} for b in user.get("boats", [])]
+    if not any(_boat_name(b) == name for b in boats):
+        raise HTTPException(status_code=404, detail="Lancha não encontrada.")
+    updates = payload.dict(exclude_unset=True)
+    for b in boats:
+        if _boat_name(b) == name:
+            b.update(updates)
+    await db.users.update_one({"cpf": cpf_clean}, {"$set": {"boats": boats}})
+    return await db.users.find_one({"cpf": cpf_clean}, {"_id": 0})
+
+
+@api_router.delete("/users/{cpf}/boats", response_model=User, dependencies=[Depends(require_admin)])
 async def remove_boat(cpf: str, boat: str):
     cpf_clean = normalize_cpf(cpf)
     user = await db.users.find_one({"cpf": cpf_clean}, {"_id": 0})
@@ -729,6 +899,39 @@ async def remove_boat(cpf: str, boat: str):
         update["boat_name"] = _boat_name(boats[0]) if boats else ""
     await db.users.update_one({"cpf": cpf_clean}, {"$set": update})
     return await db.users.find_one({"cpf": cpf_clean}, {"_id": 0})
+
+
+@api_router.get("/users/mensalidades/vencendo", dependencies=[Depends(require_admin)])
+async def mensalidades_vencendo(days: int = 30):
+    """Lanchas cujo valor de mensalidade vence dentro de `days` dias (padrão 30
+    — avisa o admin com 1 mês de antecedência), incluindo as já vencidas, para
+    que o valor seja revisto/renovado. Calculado sob demanda, sem agendador."""
+    today = now_br().date()
+    limit = today + timedelta(days=days)
+    users = await db.users.find({"is_staff": {"$ne": True}}, {"_id": 0}).to_list(2000)
+    result = []
+    for u in users:
+        for b in u.get("boats", []):
+            if not isinstance(b, dict):
+                continue
+            valid_until = b.get("monthly_fee_valid_until")
+            if not valid_until:
+                continue
+            try:
+                due = date_cls.fromisoformat(valid_until)
+            except ValueError:
+                continue
+            if due <= limit:
+                result.append({
+                    "cpf": u["cpf"],
+                    "client_name": u["name"],
+                    "boat_name": b.get("name"),
+                    "monthly_fee": b.get("monthly_fee"),
+                    "valid_until": valid_until,
+                    "days_remaining": (due - today).days,
+                })
+    result.sort(key=lambda x: x["valid_until"])
+    return result
 
 
 # ===================== Conveniência (produtos + pedidos) =====================
@@ -771,7 +974,7 @@ async def list_products(all: bool = False):
     return docs
 
 
-@api_router.post("/products")
+@api_router.post("/products", dependencies=[Depends(require_admin)])
 async def create_product(payload: ProductInput):
     name = payload.name.strip()
     if not name:
@@ -791,7 +994,7 @@ async def create_product(payload: ProductInput):
     return doc
 
 
-@api_router.put("/products/{pid}")
+@api_router.put("/products/{pid}", dependencies=[Depends(require_admin)])
 async def update_product(pid: str, payload: ProductUpdate):
     update = {k: v for k, v in payload.dict().items() if v is not None}
     if "name" in update:
@@ -808,7 +1011,7 @@ async def update_product(pid: str, payload: ProductUpdate):
     return await db.products.find_one({"id": pid}, {"_id": 0})
 
 
-@api_router.post("/products/{pid}/image")
+@api_router.post("/products/{pid}/image", dependencies=[Depends(require_admin)])
 async def upload_product_image(pid: str, file: UploadFile = File(...)):
     product = await db.products.find_one({"id": pid}, {"_id": 0})
     if not product:
@@ -833,6 +1036,12 @@ async def upload_product_image(pid: str, file: UploadFile = File(...)):
 
 @api_router.get("/files/{path:path}")
 async def serve_file(path: str):
+    # This is a public, unauthenticated proxy in front of shared object
+    # storage — without this prefix check, `path` was passed straight
+    # through, so any caller could probe/read any object in that storage
+    # account, not just this app's own uploads.
+    if ".." in path or not path.startswith(f"{APP_NAME}/uploads/"):
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado.")
     try:
         content, content_type = await run_in_threadpool(get_object, path)
     except Exception as e:
@@ -841,7 +1050,7 @@ async def serve_file(path: str):
     return Response(content=content, media_type=content_type, headers={"Cache-Control": "public, max-age=86400"})
 
 
-@api_router.delete("/products/{pid}")
+@api_router.delete("/products/{pid}", dependencies=[Depends(require_admin)])
 async def delete_product(pid: str):
     res = await db.products.delete_one({"id": pid})
     if res.deleted_count == 0:
@@ -892,7 +1101,7 @@ async def list_orders(cpf: Optional[str] = None):
     return docs
 
 
-@api_router.patch("/convenience/orders/{oid}/status")
+@api_router.patch("/convenience/orders/{oid}/status", dependencies=[Depends(require_staff)])
 async def set_order_status(oid: str, status: str):
     if status not in ("pendente", "em_preparo", "pronto", "entregue", "cancelada"):
         raise HTTPException(status_code=400, detail="Status inválido.")
@@ -904,7 +1113,7 @@ async def set_order_status(oid: str, status: str):
     return await db.convenience_orders.find_one({"id": oid}, {"_id": 0})
 
 
-@api_router.get("/reports/weekly")
+@api_router.get("/reports/weekly", dependencies=[Depends(require_admin)])
 async def weekly_report():
     """Últimos 7 dias: contagem de movimentações e faturamento (conveniência + reboque) por dia."""
     today = datetime.now(timezone.utc).date()
@@ -1010,7 +1219,7 @@ async def cancel_authorization(aid: str):
     return await db.authorizations.find_one({"id": aid}, {"_id": 0})
 
 
-@api_router.patch("/authorizations/{aid}/checkin")
+@api_router.patch("/authorizations/{aid}/checkin", dependencies=[Depends(require_staff)])
 async def checkin_authorization(aid: str):
     now_iso = datetime.now(timezone.utc).isoformat()
     res = await db.authorizations.update_one(
@@ -1189,7 +1398,7 @@ async def list_emergencies(cpf: Optional[str] = None, status: Optional[str] = No
     return docs
 
 
-@api_router.patch("/emergencies/{eid}/bill")
+@api_router.patch("/emergencies/{eid}/bill", dependencies=[Depends(require_admin)])
 async def bill_emergency(eid: str, payload: BillInput):
     now_iso = datetime.now(timezone.utc).isoformat()
     res = await db.emergencies.update_one(
@@ -1201,7 +1410,7 @@ async def bill_emergency(eid: str, payload: BillInput):
     return await db.emergencies.find_one({"id": eid}, {"_id": 0})
 
 
-@api_router.patch("/emergencies/{eid}/resolve")
+@api_router.patch("/emergencies/{eid}/resolve", dependencies=[Depends(require_staff)])
 async def resolve_emergency(eid: str):
     now_iso = datetime.now(timezone.utc).isoformat()
     res = await db.emergencies.update_one(
@@ -1223,8 +1432,79 @@ async def cancel_emergency(eid: str):
     return await db.emergencies.find_one({"id": eid}, {"_id": 0})
 
 
+# ===================== Serviços (lavagem, marinheiro, abastecimento) =====================
+SERVICO_TYPES = ("lavagem", "marinheiro", "abastecimento")
+SERVICO_LABELS = {
+    "lavagem": "Lavagem de Lancha",
+    "marinheiro": "Marinheiro",
+    "abastecimento": "Abastecimento de Combustível",
+}
+
+
+class ServicoInput(BaseModel):
+    cpf: str
+    boat_name: Optional[str] = None
+    type: Literal["lavagem", "marinheiro", "abastecimento"]
+    desired_date: Optional[str] = None  # YYYY-MM-DD
+    desired_time: Optional[str] = None  # HH:MM
+    observation: Optional[str] = None
+
+
+@api_router.post("/servicos")
+async def create_servico(payload: ServicoInput):
+    cpf = normalize_cpf(payload.cpf)
+    user = await db.users.find_one({"cpf": cpf}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="CPF não cadastrado.")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "cpf": cpf,
+        "user_name": user["name"],
+        "boat_name": payload.boat_name or user.get("boat_name"),
+        "type": payload.type,
+        "desired_date": payload.desired_date,
+        "desired_time": payload.desired_time,
+        "observation": (payload.observation or "").strip() or None,
+        "status": "pendente",
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+    await db.servicos.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/servicos")
+async def list_servicos(cpf: Optional[str] = None, status: Optional[str] = None):
+    query: dict = {}
+    if cpf:
+        query["cpf"] = normalize_cpf(cpf)
+    if status:
+        query["status"] = status
+    return await db.servicos.find(query, {"_id": 0}).sort("created_at", -1).to_list(2000)
+
+
+@api_router.patch("/servicos/{sid}/status", dependencies=[Depends(require_staff)])
+async def set_servico_status(sid: str, status: Literal["pendente", "em_andamento", "concluido", "cancelado"]):
+    now_iso = datetime.now(timezone.utc).isoformat()
+    res = await db.servicos.update_one({"id": sid}, {"$set": {"status": status, "updated_at": now_iso}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Solicitação não encontrada.")
+    return await db.servicos.find_one({"id": sid}, {"_id": 0})
+
+
+@api_router.patch("/servicos/{sid}/cancel")
+async def cancel_servico(sid: str):
+    now_iso = datetime.now(timezone.utc).isoformat()
+    res = await db.servicos.update_one({"id": sid}, {"$set": {"status": "cancelado", "updated_at": now_iso}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Solicitação não encontrada.")
+    return await db.servicos.find_one({"id": sid}, {"_id": 0})
+
+
 # ===================== Relatório de consumo (cobrança mensal) =====================
-@api_router.get("/reports/consumo")
+@api_router.get("/reports/consumo", dependencies=[Depends(require_admin)])
 async def consumo_report(month: Optional[str] = None, cpf: Optional[str] = None):
     """month = YYYY-MM. Agrupa por cliente o consumo de conveniência (pedidos
     não cancelados) e reboques faturados (billed_amount) no mês."""
@@ -1291,7 +1571,7 @@ class StatementSend(BaseModel):
     month: str  # YYYY-MM
 
 
-@api_router.post("/statements/send")
+@api_router.post("/statements/send", dependencies=[Depends(require_admin)])
 async def send_statement(payload: StatementSend):
     cpf = normalize_cpf(payload.cpf)
     user = await db.users.find_one({"cpf": cpf}, {"_id": 0})
@@ -1335,6 +1615,1168 @@ async def read_statement(sid: str):
     return {"ok": True}
 
 
+# ===================== Fatura mensal (mensalidade + consumo, PDF) =====================
+def _is_business_day(d: date_cls) -> bool:
+    return d.weekday() < 5  # 0=segunda .. 4=sexta
+
+
+def _due_date_for_month(due_day: int, year: int, month: int) -> date_cls:
+    day = min(max(due_day, 1), _days_in_month(year, month))
+    return date_cls(year, month, day)
+
+
+def _fatura_send_date(due_date: date_cls) -> date_cls:
+    """Envio sempre 2 dias antes do vencimento, adiantado para o dia útil
+    anterior caso caia em fim de semana."""
+    send = due_date - timedelta(days=2)
+    while not _is_business_day(send):
+        send -= timedelta(days=1)
+    return send
+
+
+def _current_fatura_due_date(due_day: int, today: date_cls) -> date_cls:
+    """Vencimento do ciclo de fatura corrente, ancorado no dia de pagamento
+    da mensalidade da lancha. Avança pro mês seguinte assim que o
+    vencimento do mês atual passa."""
+    candidate = _due_date_for_month(due_day, today.year, today.month)
+    if today > candidate:
+        nxt_month = today.month + 1
+        nxt_year = today.year
+        if nxt_month > 12:
+            nxt_month = 1
+            nxt_year += 1
+        candidate = _due_date_for_month(due_day, nxt_year, nxt_month)
+    return candidate
+
+
+async def _build_fatura(cpf: str, boat: dict, due_date: date_cls) -> dict:
+    """Fecha as despesas do cliente (conveniência + reboques) na mesma janela
+    do ciclo de pagamento da mensalidade da lancha, e soma o valor da
+    mensalidade junto com as demais despesas."""
+    period_end = due_date
+    period_start = period_end - timedelta(days=29)
+    start_iso = period_start.isoformat()
+    end_iso = period_end.isoformat()
+
+    order_q = {
+        "cpf": cpf,
+        "boat_name": boat.get("name"),
+        "status": {"$ne": "cancelada"},
+        "created_at": {"$gte": start_iso, "$lt": f"{end_iso}T23:59:59.999999"},
+    }
+    reboque_q = {
+        "cpf": cpf,
+        "boat_name": boat.get("name"),
+        "kind": "reboque",
+        "billed_amount": {"$ne": None},
+        "billed_at": {"$gte": start_iso, "$lt": f"{end_iso}T23:59:59.999999"},
+    }
+    orders = await db.convenience_orders.find(order_q, {"_id": 0}).to_list(2000)
+    reboques = await db.emergencies.find(reboque_q, {"_id": 0}).to_list(2000)
+
+    convenience_total = round(sum(o.get("total", 0) for o in orders), 2)
+    reboque_total = round(sum((r.get("billed_amount") or 0) for r in reboques), 2)
+    mensalidade = round(boat.get("monthly_fee") or 0, 2)
+    total = round(mensalidade + convenience_total + reboque_total, 2)
+
+    return {
+        "boat_name": boat.get("name"),
+        "period_start": start_iso,
+        "period_end": end_iso,
+        "due_date": due_date.isoformat(),
+        "mensalidade": mensalidade,
+        "convenience_total": convenience_total,
+        "reboque_total": reboque_total,
+        "total": total,
+        "orders": [
+            {"id": o["id"], "total": o.get("total", 0), "created_at": o.get("created_at"), "items": o.get("items", [])}
+            for o in orders
+        ],
+        "reboques": [
+            {"id": r["id"], "amount": r.get("billed_amount") or 0, "billed_at": r.get("billed_at")}
+            for r in reboques
+        ],
+    }
+
+
+@api_router.get("/fatura/preview")
+async def fatura_preview(cpf: str, boat_name: Optional[str] = None):
+    """Prévia da(s) fatura(s) do ciclo corrente do cliente, sem persistir
+    nem contar como envio — usada pela tela Minha Fatura."""
+    cpf_clean = normalize_cpf(cpf)
+    user = await db.users.find_one({"cpf": cpf_clean}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+    boats = [b for b in user.get("boats", []) if isinstance(b, dict)]
+    if boat_name:
+        boats = [b for b in boats if b.get("name") == boat_name]
+    today = now_br().date()
+    results = []
+    for b in boats:
+        if not b.get("monthly_fee") or not b.get("mensalidade_due_day"):
+            continue
+        due_date = _current_fatura_due_date(int(b["mensalidade_due_day"]), today)
+        send_date = _fatura_send_date(due_date)
+        fatura = await _build_fatura(cpf_clean, b, due_date)
+        fatura["send_date"] = send_date.isoformat()
+        results.append(fatura)
+    return {"cpf": cpf_clean, "user_name": user["name"], "faturas": results}
+
+
+async def _maybe_send_faturas(cpf: str, user_name: str, boats: list):
+    today = now_br().date()
+    for b in boats:
+        if not isinstance(b, dict) or not b.get("monthly_fee") or not b.get("mensalidade_due_day"):
+            continue
+        due_date = _current_fatura_due_date(int(b["mensalidade_due_day"]), today)
+        send_date = _fatura_send_date(due_date)
+        if today < send_date:
+            continue
+        exists = await db.faturas.find_one(
+            {"cpf": cpf, "boat_name": b.get("name"), "due_date": due_date.isoformat()}
+        )
+        if exists:
+            continue
+        fatura = await _build_fatura(cpf, b, due_date)
+        fatura["id"] = str(uuid.uuid4())
+        fatura["cpf"] = cpf
+        fatura["user_name"] = user_name
+        fatura["read"] = False
+        fatura["sent_at"] = datetime.now(timezone.utc).isoformat()
+        await db.faturas.insert_one(dict(fatura))
+        await create_notification(
+            cpf,
+            "Fatura disponível",
+            f"Sua fatura da lancha {b.get('name')} (venc. {due_date.strftime('%d/%m/%Y')}) já está disponível.",
+            kind="fatura",
+            ref_id=fatura["id"],
+        )
+
+
+@api_router.get("/faturas")
+async def list_faturas(cpf: Optional[str] = None):
+    if cpf:
+        cpf_clean = normalize_cpf(cpf)
+        user = await db.users.find_one({"cpf": cpf_clean}, {"_id": 0})
+        if user:
+            await _maybe_send_faturas(cpf_clean, user["name"], user.get("boats") or [])
+        query = {"cpf": cpf_clean}
+    else:
+        query = {}
+    docs = await db.faturas.find(query, {"_id": 0}).sort("sent_at", -1).to_list(500)
+    return docs
+
+
+@api_router.patch("/faturas/{fid}/read")
+async def read_fatura(fid: str):
+    await db.faturas.update_one({"id": fid}, {"$set": {"read": True}})
+    return {"ok": True}
+
+
+# ===================== Ponto Eletrônico =====================
+PONTO_TYPES = ("entrada", "saida_almoco", "retorno_almoco", "saida_final")
+PONTO_TYPE_LABELS = {
+    "entrada": "Entrada",
+    "saida_almoco": "Saída Almoço",
+    "retorno_almoco": "Retorno Almoço",
+    "saida_final": "Saída Final",
+}
+PONTO_MIN = time(7, 0)
+PONTO_MAX = time(19, 30)
+
+
+class PontoInput(BaseModel):
+    type: Literal["entrada", "saida_almoco", "retorno_almoco", "saida_final"]
+
+
+class PontoUpdate(BaseModel):
+    date: Optional[str] = None  # YYYY-MM-DD
+    time: Optional[str] = None  # HH:MM
+
+
+@api_router.post("/ponto")
+async def bater_ponto(payload: PontoInput, claims: dict = Depends(require_staff)):
+    cpf = claims.get("cpf")
+    user = await db.users.find_one({"cpf": cpf}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado.")
+    now = now_br()
+    if not (PONTO_MIN <= now.time() <= PONTO_MAX):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Ponto só pode ser registrado entre {PONTO_MIN.strftime('%H:%M')} e {PONTO_MAX.strftime('%H:%M')}.",
+        )
+    today_str = now.strftime("%Y-%m-%d")
+    existing = await db.time_entries.find_one({"cpf": cpf, "date": today_str, "type": payload.type})
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{PONTO_TYPE_LABELS[payload.type]} já registrada hoje, às {existing['time']}.",
+        )
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "cpf": cpf,
+        "user_name": user.get("name"),
+        "type": payload.type,
+        "date": now.strftime("%Y-%m-%d"),
+        "time": now.strftime("%H:%M"),
+        "edited": False,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+    await db.time_entries.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/ponto")
+async def list_ponto(
+    cpf: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    claims: dict = Depends(require_staff),
+):
+    # Staff only sees their own punches; admin can see anyone's (or all, if no cpf given).
+    query: dict = {}
+    if not claims.get("is_admin"):
+        query["cpf"] = claims.get("cpf")
+    elif cpf:
+        query["cpf"] = normalize_cpf(cpf)
+    if date_from or date_to:
+        date_q = {}
+        if date_from:
+            date_q["$gte"] = date_from
+        if date_to:
+            date_q["$lte"] = date_to
+        query["date"] = date_q
+    docs = await db.time_entries.find(query, {"_id": 0}).sort([("date", -1), ("time", -1)]).to_list(2000)
+    return docs
+
+
+@api_router.put("/ponto/{pid}", dependencies=[Depends(require_admin)])
+async def update_ponto(pid: str, payload: PontoUpdate):
+    updates: dict = {"updated_at": datetime.now(timezone.utc).isoformat(), "edited": True}
+    if payload.date is not None:
+        updates["date"] = payload.date
+    if payload.time is not None:
+        updates["time"] = payload.time
+    res = await db.time_entries.update_one({"id": pid}, {"$set": updates})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Registro de ponto não encontrado.")
+    return await db.time_entries.find_one({"id": pid}, {"_id": 0})
+
+
+@api_router.delete("/ponto/{pid}", dependencies=[Depends(require_admin)])
+async def delete_ponto(pid: str):
+    res = await db.time_entries.delete_one({"id": pid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Registro de ponto não encontrado.")
+    return {"ok": True}
+
+
+def _ponto_day_hours(entries_for_day: dict) -> float:
+    """entries_for_day: {'entrada': 'HH:MM', 'saida_almoco': ..., ...}. Missing or
+    out-of-order pairs (e.g. saída antes da entrada) simply don't count — a
+    partial day (esqueceu de bater um ponto) shows less than the real total
+    instead of raising, since this feeds a report an admin reads, not a payment
+    calculation that must reject bad data outright."""
+    def to_min(hhmm):
+        if not hhmm:
+            return None
+        h, m = hhmm.split(":")
+        return int(h) * 60 + int(m)
+
+    entrada = to_min(entries_for_day.get("entrada"))
+    saida_almoco = to_min(entries_for_day.get("saida_almoco"))
+    retorno_almoco = to_min(entries_for_day.get("retorno_almoco"))
+    saida_final = to_min(entries_for_day.get("saida_final"))
+    total = 0
+    if entrada is not None and saida_almoco is not None and saida_almoco > entrada:
+        total += saida_almoco - entrada
+    if retorno_almoco is not None and saida_final is not None and saida_final > retorno_almoco:
+        total += saida_final - retorno_almoco
+    return round(total / 60, 2)
+
+
+@api_router.get("/ponto/relatorio", dependencies=[Depends(require_admin)])
+async def relatorio_ponto(date_from: str, date_to: str, cpf: Optional[str] = None):
+    """Total de horas trabalhadas por funcionário no período, calculado a partir
+    dos pares entrada/saída-almoço e retorno-almoço/saída-final de cada dia."""
+    query: dict = {"date": {"$gte": date_from, "$lte": date_to}}
+    if cpf:
+        query["cpf"] = normalize_cpf(cpf)
+    docs = await db.time_entries.find(query, {"_id": 0}).to_list(5000)
+
+    by_day: dict = {}
+    for d in docs:
+        by_day.setdefault((d["cpf"], d["date"]), {})[d["type"]] = d["time"]
+
+    by_employee: dict = {}
+    for (c, date), entries in by_day.items():
+        hours = _ponto_day_hours(entries)
+        b = by_employee.setdefault(c, {"cpf": c, "name": None, "total_hours": 0.0, "days": []})
+        b["total_hours"] = round(b["total_hours"] + hours, 2)
+        b["days"].append({"date": date, "hours": hours, **entries})
+
+    if by_employee:
+        users = await db.users.find({"cpf": {"$in": list(by_employee.keys())}}, {"_id": 0, "cpf": 1, "name": 1}).to_list(len(by_employee))
+        names = {u["cpf"]: u["name"] for u in users}
+        for c, b in by_employee.items():
+            b["name"] = names.get(c, c)
+
+    employees = sorted(by_employee.values(), key=lambda x: x["name"] or "")
+    for b in employees:
+        b["days"].sort(key=lambda x: x["date"])
+    return {"date_from": date_from, "date_to": date_to, "employees": employees}
+
+
+# ===================== Escala de Trabalho =====================
+class EscalaInput(BaseModel):
+    date: str  # YYYY-MM-DD
+    cpf: str
+    observation: Optional[str] = None
+
+
+def _week_bounds_sunday(iso_date: str) -> tuple:
+    """Semana domingo-sábado que contém a data (mesmo agrupamento usado na
+    grade do calendário no app)."""
+    d = date_cls.fromisoformat(iso_date)
+    dow = (d.weekday() + 1) % 7  # Python: seg=0..dom=6 → aqui dom=0..sáb=6
+    start = d - timedelta(days=dow)
+    end = start + timedelta(days=6)
+    return start, end
+
+
+def _sundays_in_month(year: int, month: int) -> List[str]:
+    total = _days_in_month(year, month)
+    return [
+        date_cls(year, month, day).isoformat()
+        for day in range(1, total + 1)
+        if date_cls(year, month, day).weekday() == 6
+    ]
+
+
+async def _validate_escala_rules(cpf: str, iso_date: str, user_name: str):
+    """Regras de escala do funcionário:
+    - Máximo 6 dias trabalhados por semana (domingo-sábado).
+    - A escala deve intercalar semanas de 6 e 5 dias: depois de uma semana
+      de 6 dias, a semana seguinte não pode passar de 5.
+    - Cada funcionário precisa folgar em pelo menos 1 domingo por mês —
+      bloqueia escalar o último domingo do mês ainda livre."""
+    target = date_cls.fromisoformat(iso_date)
+    week_start, week_end = _week_bounds_sunday(iso_date)
+
+    current_week_count = await db.escalas.count_documents(
+        {"cpf": cpf, "date": {"$gte": week_start.isoformat(), "$lte": week_end.isoformat()}}
+    )
+    if current_week_count >= 6:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{user_name} já está escalado(a) 6 dias na semana de {week_start.strftime('%d/%m')} a {week_end.strftime('%d/%m')} — esse é o máximo permitido por semana.",
+        )
+
+    prev_week_start = week_start - timedelta(days=7)
+    prev_week_end = week_start - timedelta(days=1)
+    prev_week_count = await db.escalas.count_documents(
+        {"cpf": cpf, "date": {"$gte": prev_week_start.isoformat(), "$lte": prev_week_end.isoformat()}}
+    )
+    if prev_week_count >= 6 and current_week_count >= 5:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{user_name} trabalhou 6 dias na semana de {prev_week_start.strftime('%d/%m')} a {prev_week_end.strftime('%d/%m')} — a escala precisa intercalar, então essa semana não pode passar de 5 dias.",
+        )
+
+    if target.weekday() == 6:
+        sundays = _sundays_in_month(target.year, target.month)
+        other_sundays = [s for s in sundays if s != iso_date]
+        if other_sundays:
+            worked_other_sundays = await db.escalas.count_documents(
+                {"cpf": cpf, "date": {"$in": other_sundays}}
+            )
+            if worked_other_sundays == len(other_sundays):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{user_name} já está escalado(a) em todos os outros domingos de {target.month:02d}/{target.year} — é obrigatório folgar em pelo menos 1 domingo no mês.",
+                )
+
+
+@api_router.post("/escala", dependencies=[Depends(require_admin)])
+async def create_escala(payload: EscalaInput):
+    cpf = normalize_cpf(payload.cpf)
+    user = await db.users.find_one({"cpf": cpf, "is_staff": True}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Funcionário não encontrado.")
+    existing = await db.escalas.find_one({"date": payload.date, "cpf": cpf})
+    if existing:
+        raise HTTPException(status_code=409, detail="Funcionário já escalado nesse dia.")
+    await _validate_escala_rules(cpf, payload.date, user["name"])
+    doc = {
+        "id": str(uuid.uuid4()),
+        "date": payload.date,
+        "cpf": cpf,
+        "user_name": user["name"],
+        "observation": (payload.observation or "").strip() or None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.escalas.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/escala", dependencies=[Depends(require_staff)])
+async def list_escala(month: Optional[str] = None, cpf: Optional[str] = None):
+    """Acessível pra staff e admin (leitura) — a página de funcionários usa
+    isso só pra visualização, sem opção de editar."""
+    query: dict = {}
+    if month:
+        query["date"] = {"$regex": f"^{month}"}
+    if cpf:
+        query["cpf"] = normalize_cpf(cpf)
+    docs = await db.escalas.find(query, {"_id": 0}).sort("date", 1).to_list(2000)
+    return docs
+
+
+@api_router.get("/escala/staff", dependencies=[Depends(require_staff)])
+async def list_escala_staff():
+    """Lista enxuta de funcionários (cpf + nome), liberada pra qualquer staff
+    — só pra montar a legenda de cores da escala na tela de visualização.
+    GET /users (com todos os campos) continua admin-only.
+    Precisa vir ANTES de /escala/{eid} nesta ordem de registro — senão a
+    rota com path param captura "staff" como eid e responde 405 pro GET."""
+    docs = await db.users.find(
+        {"is_staff": True, "active": {"$ne": False}}, {"_id": 0, "cpf": 1, "name": 1}
+    ).sort("name", 1).to_list(500)
+    return docs
+
+
+@api_router.delete("/escala/{eid}", dependencies=[Depends(require_admin)])
+async def delete_escala(eid: str):
+    res = await db.escalas.delete_one({"id": eid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Escala não encontrada.")
+    return {"ok": True}
+
+
+class EscalaGerarInput(BaseModel):
+    cpf: str
+    month: str  # YYYY-MM
+    start_with: Literal["seis", "cinco"] = "seis"  # padrão da 1ª semana, só usado sem histórico
+
+
+@api_router.post("/escala/gerar", dependencies=[Depends(require_admin)])
+async def gerar_escala_mes(payload: EscalaGerarInput):
+    """Preenche automaticamente a escala de um funcionário pro mês inteiro,
+    intercalando semanas de 6 e 5 dias (domingo-sábado) e garantindo folga
+    em pelo menos 1 domingo por mês:
+    - Semana de 6 dias: folga só na segunda-feira.
+    - Semana de 5 dias: folga no domingo e na segunda-feira.
+    Como toda semana de 5 dias já inclui domingo de folga, a regra do
+    domingo fica satisfeita naturalmente pela intercalação.
+    Dias que esse funcionário já tem escala (cadastrados manualmente ou
+    numa geração anterior) são mantidos como estão, nunca sobrescritos.
+    Cada dia ainda passa pela mesma validação usada no cadastro manual —
+    se algo já cadastrado deixar um dia inviável, esse dia é reportado em
+    "skipped" com o motivo, e a geração continua pros demais dias."""
+    cpf = normalize_cpf(payload.cpf)
+    user = await db.users.find_one({"cpf": cpf, "is_staff": True}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Funcionário não encontrado.")
+    try:
+        year, mon = int(payload.month[:4]), int(payload.month[5:7])
+        month_start = date_cls(year, mon, 1)
+    except (ValueError, IndexError):
+        raise HTTPException(status_code=400, detail="Mês inválido. Use o formato YYYY-MM.")
+    month_end = date_cls(year, mon, _days_in_month(year, mon))
+
+    week_start_of_month, _ = _week_bounds_sunday(month_start.isoformat())
+    prev_week_start = week_start_of_month - timedelta(days=7)
+    prev_week_end = week_start_of_month - timedelta(days=1)
+    prev_week_count = await db.escalas.count_documents(
+        {"cpf": cpf, "date": {"$gte": prev_week_start.isoformat(), "$lte": prev_week_end.isoformat()}}
+    )
+    if prev_week_count >= 6:
+        target = 5
+    elif prev_week_count > 0:
+        target = 6
+    else:
+        target = 6 if payload.start_with == "seis" else 5
+
+    existing = await db.escalas.find(
+        {"cpf": cpf, "date": {"$regex": f"^{payload.month}"}}, {"_id": 0, "date": 1}
+    ).to_list(100)
+    existing_dates = {e["date"] for e in existing}
+
+    created = []
+    skipped = []
+    cursor = week_start_of_month
+    while cursor <= month_end:
+        off_indices = {1} if target == 6 else {0, 1}  # 0=domingo, 1=segunda
+        for i in range(7):
+            day = cursor + timedelta(days=i)
+            if day < month_start or day > month_end or i in off_indices:
+                continue
+            iso = day.isoformat()
+            if iso in existing_dates:
+                continue
+            try:
+                await _validate_escala_rules(cpf, iso, user["name"])
+            except HTTPException as e:
+                skipped.append({"date": iso, "reason": e.detail})
+                continue
+            doc = {
+                "id": str(uuid.uuid4()),
+                "date": iso,
+                "cpf": cpf,
+                "user_name": user["name"],
+                "observation": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.escalas.insert_one(doc)
+            doc.pop("_id", None)
+            created.append(doc)
+            existing_dates.add(iso)
+        cursor += timedelta(days=7)
+        target = 5 if target == 6 else 6
+
+    return {"created": created, "skipped": skipped}
+
+
+# ===================== Encomendas =====================
+ENCOMENDA_TAXA_KEY = "encomenda_taxa"
+
+
+async def _get_encomenda_taxa() -> float:
+    doc = await db.config.find_one({"key": ENCOMENDA_TAXA_KEY})
+    return round(doc["value"], 2) if doc else 0.0
+
+
+@api_router.get("/encomendas/taxa", dependencies=[Depends(require_staff)])
+async def get_encomenda_taxa():
+    return {"value": await _get_encomenda_taxa()}
+
+
+class EncomendaTaxaInput(BaseModel):
+    value: float
+
+
+@api_router.put("/encomendas/taxa", dependencies=[Depends(require_admin)])
+async def set_encomenda_taxa(payload: EncomendaTaxaInput):
+    if payload.value < 0:
+        raise HTTPException(status_code=400, detail="Valor da taxa não pode ser negativo.")
+    value = round(payload.value, 2)
+    await db.config.update_one(
+        {"key": ENCOMENDA_TAXA_KEY}, {"$set": {"key": ENCOMENDA_TAXA_KEY, "value": value}}, upsert=True
+    )
+    return {"value": value}
+
+
+class EncomendaInput(BaseModel):
+    cpf: str
+    boat_name: Optional[str] = None
+    description: Optional[str] = None
+    received_at: Optional[str] = None  # ISO datetime; default = agora
+
+
+@api_router.post("/encomendas", dependencies=[Depends(require_staff)])
+async def create_encomenda(payload: EncomendaInput):
+    cpf = normalize_cpf(payload.cpf)
+    user = await db.users.find_one({"cpf": cpf}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+    # Taxa é congelada no momento do recebimento — alterar a configuração
+    # depois não deve mudar o valor de encomendas já registradas.
+    taxa = await _get_encomenda_taxa()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "cpf": cpf,
+        "client_name": user["name"],
+        "boat_name": (payload.boat_name or "").strip() or None,
+        "description": (payload.description or "").strip() or None,
+        "received_at": (payload.received_at or now_iso),
+        "fee": taxa,
+        "photo_url": None,
+        "storage_path": None,
+        "status": "aguardando",
+        "delivered_at": None,
+        "received_by_name": None,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+    await db.encomendas.insert_one(doc)
+    doc.pop("_id", None)
+
+    fee_str = f"R$ {taxa:.2f}".replace(".", ",")
+    body_parts = ["Sua encomenda"]
+    if doc["boat_name"]:
+        body_parts.append(f"da lancha {doc['boat_name']}")
+    if doc["description"]:
+        body_parts.append(f'— "{doc["description"]}"')
+    body = " ".join(body_parts) + f" chegou na marina. Taxa de recebimento: {fee_str}."
+    await create_notification(cpf, "Encomenda recebida", body, kind="encomenda", ref_id=doc["id"])
+
+    return doc
+
+
+@api_router.get("/encomendas", dependencies=[Depends(require_staff)])
+async def list_encomendas(cpf: Optional[str] = None, status: Optional[str] = None):
+    query: dict = {}
+    if cpf:
+        query["cpf"] = normalize_cpf(cpf)
+    if status:
+        query["status"] = status
+    docs = await db.encomendas.find(query, {"_id": 0}).sort("received_at", -1).to_list(2000)
+    return docs
+
+
+@api_router.post("/encomendas/{eid}/photo", dependencies=[Depends(require_staff)])
+async def upload_encomenda_photo(eid: str, file: UploadFile = File(...)):
+    enc = await db.encomendas.find_one({"id": eid}, {"_id": 0})
+    if not enc:
+        raise HTTPException(status_code=404, detail="Encomenda não encontrada.")
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Arquivo vazio.")
+    ext = "jpg"
+    if file.filename and "." in file.filename:
+        ext = file.filename.rsplit(".", 1)[-1].lower()[:5]
+    path = f"{APP_NAME}/uploads/encomendas/{uuid.uuid4()}.{ext}"
+    content_type = file.content_type or "image/jpeg"
+    try:
+        await run_in_threadpool(put_object, path, content, content_type)
+    except Exception as e:
+        logger.error(f"Erro ao subir foto da encomenda: {e}")
+        raise HTTPException(status_code=502, detail="Falha ao enviar a foto.")
+    photo_url = f"/api/files/{path}"
+    await db.encomendas.update_one(
+        {"id": eid},
+        {"$set": {"photo_url": photo_url, "storage_path": path, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return await db.encomendas.find_one({"id": eid}, {"_id": 0})
+
+
+class EncomendaEntregaInput(BaseModel):
+    received_by_name: str
+
+
+@api_router.patch("/encomendas/{eid}/entregar", dependencies=[Depends(require_staff)])
+async def entregar_encomenda(eid: str, payload: EncomendaEntregaInput):
+    enc = await db.encomendas.find_one({"id": eid}, {"_id": 0})
+    if not enc:
+        raise HTTPException(status_code=404, detail="Encomenda não encontrada.")
+    if enc["status"] == "entregue":
+        raise HTTPException(status_code=400, detail="Encomenda já foi entregue.")
+    name = payload.received_by_name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Informe o nome de quem retirou a encomenda.")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.encomendas.update_one(
+        {"id": eid},
+        {"$set": {"status": "entregue", "delivered_at": now_iso, "received_by_name": name, "updated_at": now_iso}},
+    )
+    return await db.encomendas.find_one({"id": eid}, {"_id": 0})
+
+
+# ===================== Painel Financeiro (Contas a Pagar / Receber) =====================
+FINANCEIRO_CATEGORIES_PAGAR = ["Fornecedores", "Manutenção", "Salários", "Utilidades", "Impostos", "Outros"]
+FINANCEIRO_CATEGORIES_RECEBER = ["Mensalidade", "Reboque", "Conveniência", "Serviços", "Outros"]
+
+
+class FinanceiroInput(BaseModel):
+    kind: Literal["pagar", "receber"]
+    description: str
+    category: str
+    amount: float
+    due_date: str  # YYYY-MM-DD
+    cpf: Optional[str] = None            # receber: cliente vinculado (opcional)
+    boat_name: Optional[str] = None      # receber: lancha do cliente vinculada (opcional)
+    supplier_name: Optional[str] = None  # pagar: fornecedor (opcional)
+    observation: Optional[str] = None
+    recurring: bool = False              # ex.: mensalidade da lancha, cobrada todo mês
+    recurring_day: Optional[int] = None  # dia do vencimento em cada mês; default = dia de due_date
+    recurring_end_date: Optional[str] = None  # YYYY-MM-DD; None = recorrente até cancelar
+
+
+class FinanceiroUpdate(BaseModel):
+    description: Optional[str] = None
+    category: Optional[str] = None
+    amount: Optional[float] = None
+    due_date: Optional[str] = None
+    observation: Optional[str] = None
+
+
+class FinanceiroPay(BaseModel):
+    paid_amount: Optional[float] = None  # default: valor integral
+
+
+@api_router.get("/financeiro/categorias", dependencies=[Depends(require_admin)])
+async def financeiro_categorias():
+    return {"pagar": FINANCEIRO_CATEGORIES_PAGAR, "receber": FINANCEIRO_CATEGORIES_RECEBER}
+
+
+def _days_in_month(year: int, month: int) -> int:
+    return (date_cls(year + (month == 12), (month % 12) + 1, 1) - timedelta(days=1)).day
+
+
+@api_router.post("/financeiro", dependencies=[Depends(require_admin)])
+async def create_financeiro(payload: FinanceiroInput):
+    if payload.amount <= 0:
+        raise HTTPException(status_code=400, detail="Valor deve ser maior que zero.")
+    if not payload.description.strip():
+        raise HTTPException(status_code=400, detail="Descrição é obrigatória.")
+    cpf = None
+    client_name = None
+    boat_name = None
+    if payload.cpf:
+        cpf = normalize_cpf(payload.cpf)
+        user = await db.users.find_one({"cpf": cpf}, {"_id": 0})
+        if not user:
+            raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+        client_name = user["name"]
+        if payload.boat_name:
+            boats = [b if isinstance(b, dict) else {"name": b} for b in user.get("boats", [])]
+            if not any(_boat_name(b) == payload.boat_name for b in boats):
+                raise HTTPException(status_code=400, detail="Lancha não encontrada para esse cliente.")
+            boat_name = payload.boat_name
+    supplier_name = (payload.supplier_name or "").strip() or None
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    recurring_id = None
+    if payload.recurring:
+        try:
+            due_day = int(payload.due_date.split("-")[2])
+        except (IndexError, ValueError):
+            raise HTTPException(status_code=400, detail="Data de vencimento inválida.")
+        day = payload.recurring_day or due_day
+        if not (1 <= day <= 31):
+            raise HTTPException(status_code=400, detail="Dia de cobrança deve estar entre 1 e 31.")
+        end_date = (payload.recurring_end_date or "").strip() or None
+        if end_date and end_date < payload.due_date:
+            raise HTTPException(status_code=400, detail="Data de término deve ser depois do vencimento inicial.")
+        rule = {
+            "id": str(uuid.uuid4()),
+            "kind": payload.kind,
+            "description": payload.description.strip(),
+            "category": payload.category,
+            "amount": round(payload.amount, 2),
+            "day": day,
+            "end_date": end_date,  # None = recorrente até cancelar
+            "cpf": cpf,
+            "client_name": client_name,
+            "boat_name": boat_name,
+            "supplier_name": supplier_name,
+            "observation": (payload.observation or "").strip() or None,
+            "active": True,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        }
+        await db.recorrencias.insert_one(rule)
+        recurring_id = rule["id"]
+
+    doc = {
+        "id": str(uuid.uuid4()),
+        "kind": payload.kind,
+        "description": payload.description.strip(),
+        "category": payload.category,
+        "amount": round(payload.amount, 2),
+        "due_date": payload.due_date,
+        "cpf": cpf,
+        "client_name": client_name,
+        "boat_name": boat_name,
+        "supplier_name": supplier_name,
+        "observation": (payload.observation or "").strip() or None,
+        "status": "pendente",
+        "paid_amount": None,
+        "paid_at": None,
+        "recurring_id": recurring_id,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+    await db.financeiro.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+def _financeiro_with_display_status(doc: dict) -> dict:
+    today = now_br().strftime("%Y-%m-%d")
+    doc["status_display"] = "atrasado" if doc["status"] == "pendente" and doc["due_date"] < today else doc["status"]
+    return doc
+
+
+async def _generate_recurring_for_month(month: str):
+    """Ensures every active recurring rule has a financeiro entry for `month`
+    (YYYY-MM), creating one on the fly if missing. Called whenever that month
+    is viewed — there's no background scheduler in this app, so generation is
+    lazy instead of cron-driven."""
+    year, mon = int(month[:4]), int(month[5:7])
+    rules = await db.recorrencias.find({"active": True}, {"_id": 0}).to_list(1000)
+    if not rules:
+        return
+    existing = await db.financeiro.find(
+        {"recurring_id": {"$in": [r["id"] for r in rules]}, "due_date": {"$regex": f"^{month}"}},
+        {"_id": 0, "recurring_id": 1},
+    ).to_list(1000)
+    have = {d["recurring_id"] for d in existing}
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for r in rules:
+        if r["id"] in have:
+            continue
+        day = min(r["day"], _days_in_month(year, mon))
+        due_date = f"{month}-{day:02d}"
+        end_date = r.get("end_date")
+        if end_date and due_date > end_date:
+            continue  # ciclo já passou da data de término da recorrência
+        doc = {
+            "id": str(uuid.uuid4()),
+            "kind": r["kind"],
+            "description": r["description"],
+            "category": r["category"],
+            "amount": r["amount"],
+            "due_date": due_date,
+            "cpf": r.get("cpf"),
+            "client_name": r.get("client_name"),
+            "boat_name": r.get("boat_name"),
+            "supplier_name": r.get("supplier_name"),
+            "observation": r.get("observation"),
+            "status": "pendente",
+            "paid_amount": None,
+            "paid_at": None,
+            "recurring_id": r["id"],
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        }
+        await db.financeiro.insert_one(doc)
+
+
+@api_router.get("/financeiro", dependencies=[Depends(require_admin)])
+async def list_financeiro(kind: Optional[str] = None, status: Optional[str] = None, month: Optional[str] = None):
+    if month:
+        await _generate_recurring_for_month(month)
+    query: dict = {}
+    if kind:
+        query["kind"] = kind
+    if month:
+        query["due_date"] = {"$regex": f"^{month}"}
+    docs = await db.financeiro.find(query, {"_id": 0}).sort("due_date", 1).to_list(5000)
+    docs = [_financeiro_with_display_status(d) for d in docs]
+    if status:
+        docs = [d for d in docs if d["status_display"] == status]
+    return docs
+
+
+@api_router.get("/financeiro/recorrencias", dependencies=[Depends(require_admin)])
+async def list_recorrencias(kind: Optional[str] = None):
+    query: dict = {"kind": kind} if kind else {}
+    return await db.recorrencias.find(query, {"_id": 0}).sort("description", 1).to_list(1000)
+
+
+@api_router.patch("/financeiro/recorrencias/{rid}/active", dependencies=[Depends(require_admin)])
+async def set_recorrencia_active(rid: str, payload: ActiveInput):
+    res = await db.recorrencias.update_one(
+        {"id": rid},
+        {"$set": {"active": payload.active, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Recorrência não encontrada.")
+    return await db.recorrencias.find_one({"id": rid}, {"_id": 0})
+
+
+@api_router.delete("/financeiro/recorrencias/{rid}", dependencies=[Depends(require_admin)])
+async def delete_recorrencia(rid: str):
+    """Cancela a regra — não afeta os lançamentos já gerados em meses anteriores."""
+    res = await db.recorrencias.delete_one({"id": rid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Recorrência não encontrada.")
+    return {"ok": True}
+
+
+@api_router.put("/financeiro/{fid}", dependencies=[Depends(require_admin)])
+async def update_financeiro(fid: str, payload: FinanceiroUpdate):
+    existing = await db.financeiro.find_one({"id": fid}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Registro não encontrado.")
+    updates = payload.dict(exclude_unset=True)
+    if "description" in updates:
+        if not (updates["description"] or "").strip():
+            raise HTTPException(status_code=400, detail="Descrição é obrigatória.")
+        updates["description"] = updates["description"].strip()
+    if "amount" in updates and updates["amount"] is not None and updates["amount"] <= 0:
+        raise HTTPException(status_code=400, detail="Valor deve ser maior que zero.")
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.financeiro.update_one({"id": fid}, {"$set": updates})
+    return _financeiro_with_display_status(await db.financeiro.find_one({"id": fid}, {"_id": 0}))
+
+
+@api_router.patch("/financeiro/{fid}/pay", dependencies=[Depends(require_admin)])
+async def pay_financeiro(fid: str, payload: FinanceiroPay):
+    doc = await db.financeiro.find_one({"id": fid}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Registro não encontrado.")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    paid_amount = payload.paid_amount if payload.paid_amount is not None else doc["amount"]
+    await db.financeiro.update_one(
+        {"id": fid},
+        {"$set": {"status": "pago", "paid_amount": round(paid_amount, 2), "paid_at": now_iso, "updated_at": now_iso}},
+    )
+    return _financeiro_with_display_status(await db.financeiro.find_one({"id": fid}, {"_id": 0}))
+
+
+@api_router.patch("/financeiro/{fid}/reabrir", dependencies=[Depends(require_admin)])
+async def reopen_financeiro(fid: str):
+    now_iso = datetime.now(timezone.utc).isoformat()
+    res = await db.financeiro.update_one(
+        {"id": fid},
+        {"$set": {"status": "pendente", "paid_amount": None, "paid_at": None, "updated_at": now_iso}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Registro não encontrado.")
+    return _financeiro_with_display_status(await db.financeiro.find_one({"id": fid}, {"_id": 0}))
+
+
+@api_router.delete("/financeiro/{fid}", dependencies=[Depends(require_admin)])
+async def delete_financeiro(fid: str):
+    res = await db.financeiro.delete_one({"id": fid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Registro não encontrado.")
+    return {"ok": True}
+
+
+@api_router.get("/financeiro/resumo", dependencies=[Depends(require_admin)])
+async def resumo_financeiro(month: Optional[str] = None):
+    """Totais do mês por status, separados por contas a pagar e a receber, mais
+    o saldo previsto (a receber - a pagar, considerando pendentes e atrasados)."""
+    if not month:
+        now = now_br()
+        month = f"{now.year}-{now.month:02d}"
+    docs = await db.financeiro.find({"due_date": {"$regex": f"^{month}"}}, {"_id": 0}).to_list(5000)
+    today = now_br().strftime("%Y-%m-%d")
+    totals = {
+        "pagar": {"pendente": 0.0, "atrasado": 0.0, "pago": 0.0},
+        "receber": {"pendente": 0.0, "atrasado": 0.0, "pago": 0.0},
+    }
+    for d in docs:
+        bucket = totals[d["kind"]]
+        if d["status"] == "pago":
+            bucket["pago"] += d.get("paid_amount") if d.get("paid_amount") is not None else d["amount"]
+        elif d["due_date"] < today:
+            bucket["atrasado"] += d["amount"]
+        else:
+            bucket["pendente"] += d["amount"]
+    for k in totals:
+        for s in totals[k]:
+            totals[k][s] = round(totals[k][s], 2)
+    saldo_previsto = round(
+        totals["receber"]["pendente"] + totals["receber"]["atrasado"]
+        - totals["pagar"]["pendente"] - totals["pagar"]["atrasado"],
+        2,
+    )
+    return {"month": month, **totals, "saldo_previsto": saldo_previsto}
+
+
+@api_router.get("/financeiro/analise", dependencies=[Depends(require_admin)])
+async def analise_financeira(date_from: str, date_to: str):
+    """Consulta por período (ou o ano inteiro, passando 1º de janeiro a 31 de
+    dezembro) para a tela de análise financeira: total e detalhamento por
+    categoria de cada lado (pagar/receber), mais a série mensal para o
+    gráfico de evolução. Base: valor total por due_date no período, mesmo
+    critério do /resumo — não filtra por status pago/pendente."""
+    docs = await db.financeiro.find(
+        {"due_date": {"$gte": date_from, "$lte": date_to}}, {"_id": 0}
+    ).to_list(10000)
+
+    def by_category(kind: str) -> list:
+        totals: dict = {}
+        for d in docs:
+            if d["kind"] != kind:
+                continue
+            totals[d["category"]] = totals.get(d["category"], 0.0) + d["amount"]
+        return sorted(
+            [{"category": c, "total": round(v, 2)} for c, v in totals.items()],
+            key=lambda x: x["total"],
+            reverse=True,
+        )
+
+    by_month: dict = {}
+    for d in docs:
+        key = d["due_date"][:7]
+        b = by_month.setdefault(key, {"month": key, "pagar": 0.0, "receber": 0.0})
+        b[d["kind"]] += d["amount"]
+    months = sorted(by_month.values(), key=lambda x: x["month"])
+    for m in months:
+        m["pagar"] = round(m["pagar"], 2)
+        m["receber"] = round(m["receber"], 2)
+
+    receber_total = round(sum(d["amount"] for d in docs if d["kind"] == "receber"), 2)
+    pagar_total = round(sum(d["amount"] for d in docs if d["kind"] == "pagar"), 2)
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "receber": {"total": receber_total, "by_category": by_category("receber")},
+        "pagar": {"total": pagar_total, "by_category": by_category("pagar")},
+        "saldo": round(receber_total - pagar_total, 2),
+        "by_month": months,
+    }
+
+
+# ===================== Fornecedores =====================
+class FornecedorInput(BaseModel):
+    name: str
+    category: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    document: Optional[str] = None  # CNPJ ou CPF
+    observation: Optional[str] = None
+
+
+class FornecedorUpdate(BaseModel):
+    name: Optional[str] = None
+    category: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    document: Optional[str] = None
+    observation: Optional[str] = None
+
+
+@api_router.post("/fornecedores", dependencies=[Depends(require_admin)])
+async def create_fornecedor(payload: FornecedorInput):
+    if not payload.name.strip():
+        raise HTTPException(status_code=400, detail="Nome é obrigatório.")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "name": payload.name.strip(),
+        "category": (payload.category or "").strip() or None,
+        "phone": (payload.phone or "").strip() or None,
+        "email": (payload.email or "").strip() or None,
+        "document": (payload.document or "").strip() or None,
+        "observation": (payload.observation or "").strip() or None,
+        "active": True,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+    await db.fornecedores.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/fornecedores", dependencies=[Depends(require_admin)])
+async def list_fornecedores(active: Optional[bool] = None):
+    query: dict = {}
+    if active is not None:
+        query["active"] = active
+    docs = await db.fornecedores.find(query, {"_id": 0}).sort("name", 1).to_list(1000)
+    return docs
+
+
+@api_router.put("/fornecedores/{fid}", dependencies=[Depends(require_admin)])
+async def update_fornecedor(fid: str, payload: FornecedorUpdate):
+    updates = payload.dict(exclude_unset=True)
+    if "name" in updates:
+        if not (updates["name"] or "").strip():
+            raise HTTPException(status_code=400, detail="Nome é obrigatório.")
+        updates["name"] = updates["name"].strip()
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    res = await db.fornecedores.update_one({"id": fid}, {"$set": updates})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Fornecedor não encontrado.")
+    return await db.fornecedores.find_one({"id": fid}, {"_id": 0})
+
+
+@api_router.patch("/fornecedores/{fid}/active", dependencies=[Depends(require_admin)])
+async def set_fornecedor_active(fid: str, payload: ActiveInput):
+    res = await db.fornecedores.update_one(
+        {"id": fid},
+        {"$set": {"active": payload.active, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Fornecedor não encontrado.")
+    return await db.fornecedores.find_one({"id": fid}, {"_id": 0})
+
+
+@api_router.delete("/fornecedores/{fid}", dependencies=[Depends(require_admin)])
+async def delete_fornecedor(fid: str):
+    res = await db.fornecedores.delete_one({"id": fid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Fornecedor não encontrado.")
+    return {"ok": True}
+
+
+# ===================== Conveniência: Lista de Compras =====================
+class CompraItemInput(BaseModel):
+    name: str
+    quantity: Optional[str] = None
+    observation: Optional[str] = None
+
+
+class CompraItemUpdate(BaseModel):
+    name: Optional[str] = None
+    quantity: Optional[str] = None
+    observation: Optional[str] = None
+
+
+class DoneInput(BaseModel):
+    done: bool
+
+
+@api_router.post("/lista-compras", dependencies=[Depends(require_admin)])
+async def create_compra_item(payload: CompraItemInput):
+    if not payload.name.strip():
+        raise HTTPException(status_code=400, detail="Nome é obrigatório.")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "name": payload.name.strip(),
+        "quantity": (payload.quantity or "").strip() or None,
+        "observation": (payload.observation or "").strip() or None,
+        "done": False,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+    await db.lista_compras.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/lista-compras", dependencies=[Depends(require_admin)])
+async def list_compras(done: Optional[bool] = None):
+    query: dict = {} if done is None else {"done": done}
+    return await db.lista_compras.find(query, {"_id": 0}).sort("created_at", 1).to_list(1000)
+
+
+@api_router.put("/lista-compras/{cid}", dependencies=[Depends(require_admin)])
+async def update_compra_item(cid: str, payload: CompraItemUpdate):
+    updates = payload.dict(exclude_unset=True)
+    if "name" in updates:
+        if not (updates["name"] or "").strip():
+            raise HTTPException(status_code=400, detail="Nome é obrigatório.")
+        updates["name"] = updates["name"].strip()
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    res = await db.lista_compras.update_one({"id": cid}, {"$set": updates})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Item não encontrado.")
+    return await db.lista_compras.find_one({"id": cid}, {"_id": 0})
+
+
+@api_router.patch("/lista-compras/{cid}/done", dependencies=[Depends(require_admin)])
+async def set_compra_done(cid: str, payload: DoneInput):
+    res = await db.lista_compras.update_one(
+        {"id": cid},
+        {"$set": {"done": payload.done, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Item não encontrado.")
+    return await db.lista_compras.find_one({"id": cid}, {"_id": 0})
+
+
+@api_router.delete("/lista-compras/{cid}", dependencies=[Depends(require_admin)])
+async def delete_compra_item(cid: str):
+    res = await db.lista_compras.delete_one({"id": cid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Item não encontrado.")
+    return {"ok": True}
+
+
 # ===================== Seed =====================
 SEED_PRODUCTS = [
     {"id": "seed-gelo", "name": "Gelo (saco 5kg)", "price": 15.0, "active": True, "in_stock": True, "category": "Outros", "image_url": None},
@@ -1364,7 +2806,10 @@ SEED_USERS = [
 @app.on_event("startup")
 async def seed_users():
     for u in SEED_USERS:
-        await db.users.update_one({"cpf": u["cpf"]}, {"$set": u}, upsert=True)
+        # $setOnInsert (não $set): só grava os dados de seed na primeira vez
+        # que o usuário é criado — em restarts seguintes não pisa em cima de
+        # edições feitas pelo admin (lanchas, mensalidade, telefone, etc.).
+        await db.users.update_one({"cpf": u["cpf"]}, {"$setOnInsert": u}, upsert=True)
     for p in SEED_PRODUCTS:
         on_insert = {k: v for k, v in p.items() if k != "category"}
         await db.products.update_one(
@@ -1386,19 +2831,31 @@ async def seed_users():
 # Include the router
 app.include_router(api_router)
 
+# CORS_ORIGINS: comma-separated list of allowed origins (e.g. the deployed web
+# app's URL). Falls back to "*" (any origin) if unset, matching prior behavior,
+# but then allow_credentials must stay False — the "*" + credentials=True
+# combination is rejected by browsers anyway and was never doing anything
+# useful. Set CORS_ORIGINS explicitly in production to lock this down and get
+# real credentialed-CORS if you ever need it.
+_cors_origins_env = os.environ.get("CORS_ORIGINS", "").strip()
+if _cors_origins_env:
+    _cors_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
+    _cors_credentials = True
+else:
+    _cors_origins = ["*"]
+    _cors_credentials = False
+    logger.warning(
+        "CORS_ORIGINS não definido — liberando qualquer origem (allow_credentials=False). "
+        "Defina CORS_ORIGINS em produção com o(s) domínio(s) real(is) do app."
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=["*"],
+    allow_credentials=_cors_credentials,
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 
 @app.on_event("shutdown")

@@ -14,11 +14,15 @@ const fmt = (iso: string) =>
 function iconFor(kind: string): keyof typeof Ionicons.glyphMap {
   if (kind === 'descida') return 'boat';
   if (kind === 'subida') return 'arrow-up-circle';
+  if (kind === 'fatura') return 'receipt';
+  if (kind === 'encomenda') return 'cube';
   return 'notifications';
 }
 function colorFor(kind: string): string {
   if (kind === 'descida') return colors.brandPrimary;
   if (kind === 'subida') return colors.success;
+  if (kind === 'fatura') return colors.brandSecondary;
+  if (kind === 'encomenda') return '#0E7490';
   return colors.brandSecondary;
 }
 
@@ -79,18 +83,27 @@ export default function AvisosScreen() {
           keyExtractor={(n) => n.id}
           contentContainerStyle={styles.list}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={colors.brandPrimary} />}
-          renderItem={({ item }) => (
-            <View style={[styles.card, !item.read && styles.cardUnread]} testID={`aviso-${item.id}`}>
-              <View style={[styles.iconWrap, { backgroundColor: colorFor(item.kind) }]}>
-                <Ionicons name={iconFor(item.kind)} size={22} color="#FFFFFF" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.cardTitle}>{item.title}</Text>
-                <Text style={styles.cardBody}>{item.body}</Text>
-                <Text style={styles.cardTime}>{fmt(item.created_at)}</Text>
-              </View>
-            </View>
-          )}
+          renderItem={({ item }) => {
+            const openable = item.kind === 'fatura' && !!item.ref_id;
+            const Wrapper = openable ? Pressable : View;
+            return (
+              <Wrapper
+                style={[styles.card, !item.read && styles.cardUnread]}
+                testID={`aviso-${item.id}`}
+                {...(openable ? { onPress: () => router.push({ pathname: '/fatura', params: { openId: item.ref_id! } }) } : {})}
+              >
+                <View style={[styles.iconWrap, { backgroundColor: colorFor(item.kind) }]}>
+                  <Ionicons name={iconFor(item.kind)} size={22} color="#FFFFFF" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cardTitle}>{item.title}</Text>
+                  <Text style={styles.cardBody}>{item.body}</Text>
+                  <Text style={styles.cardTime}>{fmt(item.created_at)}</Text>
+                </View>
+                {openable ? <Ionicons name="document-text-outline" size={20} color={colors.brandPrimary} /> : null}
+              </Wrapper>
+            );
+          }}
         />
       )}
     </SafeAreaView>

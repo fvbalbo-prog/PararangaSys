@@ -7,23 +7,34 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { formatMoney as money } from '@/src/format';
-import { api } from '@/src/api';
-import type { MarinaRequest, ConvenienceOrder, Emergency, WeeklyDay } from '@/src/api';
+import { api, isAuthValidOn, authValidityLabel, PONTO_LABELS } from '@/src/api';
+import type { MarinaRequest, ConvenienceOrder, Emergency, WeeklyDay, FinanceiroEntry, Authorization, PontoEntry, PontoType } from '@/src/api';
 import { StatusBadge } from '@/src/components/StatusBadge';
 import { useAdminLayout } from '@/src/hooks/useAdminLayout';
 
 function pad(n: number) { return n.toString().padStart(2, '0'); }
 function todayISO() { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
 const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+function brDate(iso?: string | null) {
+  if (!iso) return '—';
+  const [y, m, d] = iso.split('-');
+  return `${d}/${m}/${y}`;
+}
+const PONTO_ORDER: PontoType[] = ['entrada', 'saida_almoco', 'retorno_almoco', 'saida_final'];
 
 type NavItem = { key: string; label: string; icon: keyof typeof Ionicons.glyphMap; route?: string };
 const NAV: NavItem[] = [
   { key: 'inicio', label: 'Visão Geral', icon: 'grid-outline' },
   { key: 'movimentacoes', label: 'Movimentações', icon: 'list-outline', route: '/admin-status' },
-  { key: 'solicitacoes', label: 'Solicitações', icon: 'receipt-outline', route: '/admin-solicitacoes' },
+  { key: 'solicitacoes', label: 'Autorizações', icon: 'receipt-outline', route: '/admin-solicitacoes' },
+  { key: 'emergencias', label: 'Emergências', icon: 'alert-circle-outline', route: '/admin-emergencias' },
   { key: 'cadastros', label: 'Cadastros', icon: 'people-outline', route: '/admin-clientes' },
-  { key: 'produtos', label: 'Conveniência', icon: 'pricetags-outline', route: '/admin-produtos' },
-  { key: 'faturamento', label: 'Faturamento', icon: 'bar-chart-outline', route: '/admin-relatorio' },
+  { key: 'produtos', label: 'Conveniência', icon: 'pricetags-outline', route: '/admin-conveniencia' },
+  { key: 'servicos', label: 'Serviços', icon: 'construct-outline', route: '/admin-servicos' },
+  { key: 'ponto', label: 'Ponto Eletrônico', icon: 'time-outline', route: '/admin-ponto' },
+  { key: 'escala', label: 'Escala de Trabalho', icon: 'calendar-outline', route: '/admin-escala' },
+  { key: 'encomendas', label: 'Encomendas', icon: 'cube-outline', route: '/admin-encomendas' },
+  { key: 'financeiro', label: 'Painel Financeiro', icon: 'wallet-outline', route: '/admin-financeiro' },
 ];
 
 export default function AdminDesktopScreen() {
@@ -33,6 +44,10 @@ export default function AdminDesktopScreen() {
   const [orders, setOrders] = useState<ConvenienceOrder[]>([]);
   const [emergencies, setEmergencies] = useState<Emergency[]>([]);
   const [weekly, setWeekly] = useState<WeeklyDay[]>([]);
+  const [mensalidadesVencendo, setMensalidadesVencendo] = useState(0);
+  const [contasPagar, setContasPagar] = useState<FinanceiroEntry[]>([]);
+  const [authorizations, setAuthorizations] = useState<Authorization[]>([]);
+  const [pontoHoje, setPontoHoje] = useState<PontoEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -44,14 +59,22 @@ export default function AdminDesktopScreen() {
     const raw = await AsyncStorage.getItem('user');
     if (!raw) return router.replace('/');
     try {
-      const [reqs, ords, emgs] = await Promise.all([
+      const [reqs, ords, emgs, mensalidades, pagar, auths, ponto] = await Promise.all([
         api.dayRequests(iso),
         api.listOrders().catch(() => []),
         api.listEmergencies().catch(() => []),
+        api.mensalidadesVencendo().catch(() => []),
+        api.listFinanceiro({ kind: 'pagar' }).catch(() => []),
+        api.listAuthorizations().catch(() => []),
+        api.listPonto({ date_from: iso, date_to: iso }).catch(() => []),
       ]);
       setItems(reqs);
       setOrders(ords);
       setEmergencies(emgs);
+      setMensalidadesVencendo(mensalidades.length);
+      setContasPagar(pagar);
+      setAuthorizations(auths);
+      setPontoHoje(ponto);
       api.weeklyReport().then(setWeekly).catch(() => {});
     } catch {
       setItems([]);
@@ -86,6 +109,29 @@ export default function AdminDesktopScreen() {
 
   const dayList = [...items].sort((a, b) => a.time.localeCompare(b.time));
 
+  const contasPagarAbertas = contasPagar
+    .filter((f) => f.status !== 'pago')
+    .sort((a, b) => a.due_date.localeCompare(b.due_date));
+  const contasPagarTotal = contasPagarAbertas.reduce((s, f) => s + f.amount, 0);
+
+  const autorizacoesHoje = authorizations.filter((a) => a.status === 'ativa' && isAuthValidOn(a, iso));
+
+  const equipeHoje = (() => {
+    const byCpf = new Map<string, { cpf: string; name: string; entries: PontoEntry[] }>();
+    for (const p of pontoHoje) {
+      if (!byCpf.has(p.cpf)) byCpf.set(p.cpf, { cpf: p.cpf, name: p.user_name, entries: [] });
+      byCpf.get(p.cpf)!.entries.push(p);
+    }
+    return Array.from(byCpf.values())
+      .map((e) => {
+        const entries = [...e.entries].sort((a, b) => a.time.localeCompare(b.time));
+        const types = new Set(entries.map((x) => x.type));
+        const working = types.has('entrada') && !types.has('saida_final');
+        return { ...e, entries, working };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  })();
+
   const doComplete = async (id: string) => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setItems((prev) => prev.map((r) => (r.id === id ? { ...r, status: 'concluida' } : r)));
@@ -105,6 +151,7 @@ export default function AdminDesktopScreen() {
     { label: 'Aguardando', value: aguardando, icon: 'hourglass', color: '#B45309' },
     { label: 'Atrasos', value: atrasos, icon: 'warning', color: colors.error },
     { label: 'Emergências', value: openEmg.length, icon: 'alert-circle', color: colors.error },
+    { label: 'Mensalidades', value: mensalidadesVencendo, icon: 'cash-outline', color: '#B45309' },
   ];
 
   return (
@@ -161,6 +208,7 @@ export default function AdminDesktopScreen() {
           ) : (
             <>
               {/* Faturamento + stats */}
+              <Text style={styles.blockKicker}>RESUMO DO DIA</Text>
               <View style={styles.gridTop}>
                 <View style={styles.fatCard} testID="desktop-faturamento">
                   <Text style={styles.fatLabel}>FATURAMENTO DE HOJE</Text>
@@ -179,6 +227,7 @@ export default function AdminDesktopScreen() {
               </View>
 
               {/* Two columns: movimentações + emergências */}
+              <Text style={styles.blockKicker}>OPERAÇÃO DO DIA</Text>
               <View style={styles.columns}>
                 <View style={styles.colWide}>
                   <View style={styles.panel}>
@@ -220,7 +269,7 @@ export default function AdminDesktopScreen() {
                       <Text style={styles.emptyLine}>Nenhuma emergência aberta. 🎉</Text>
                     ) : (
                       openEmg.slice(0, 6).map((e) => (
-                        <Pressable key={e.id} onPress={() => router.push('/admin-solicitacoes')} style={styles.emgRow} testID={`desktop-emg-${e.id}`}>
+                        <Pressable key={e.id} onPress={() => router.push('/admin-emergencias')} style={styles.emgRow} testID={`desktop-emg-${e.id}`}>
                           <Ionicons name={e.kind === 'reboque' ? 'boat' : 'alert-circle'} size={18} color={colors.error} />
                           <View style={{ flex: 1 }}>
                             <Text style={styles.emgName}>{e.user_name} · {e.boat_name}</Text>
@@ -234,8 +283,99 @@ export default function AdminDesktopScreen() {
                 </View>
               </View>
 
+              {/* Contas a pagar + Autorizações */}
+              <Text style={styles.blockKicker}>FINANCEIRO & AUTORIZAÇÕES</Text>
+              <View style={styles.columns}>
+                <View style={styles.colWide}>
+                  <View style={styles.panel} testID="desktop-contas-pagar">
+                    <View style={styles.panelHead}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.panelTitle}>Contas a pagar</Text>
+                        {contasPagarAbertas.length > 0 ? <Text style={styles.panelSub}>Total em aberto: {money(contasPagarTotal)}</Text> : null}
+                      </View>
+                      <Pressable onPress={() => router.push('/admin-financeiro')} testID="see-all-pagar"><Text style={styles.panelLink}>Ver tudo</Text></Pressable>
+                    </View>
+                    {contasPagarAbertas.length === 0 ? (
+                      <Text style={styles.emptyLine}>Nenhuma conta a pagar em aberto. 🎉</Text>
+                    ) : (
+                      contasPagarAbertas.slice(0, 8).map((f) => (
+                        <View key={f.id} style={styles.pagarRow} testID={`desktop-pagar-${f.id}`}>
+                          <View style={[styles.pagarDot, f.status_display === 'atrasado' && { backgroundColor: colors.error }]} />
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.movBoat}>{f.description}</Text>
+                            <Text style={styles.movUser}>{f.category} • {f.supplier_name || f.client_name || 'Sem fornecedor'}</Text>
+                          </View>
+                          <View style={{ alignItems: 'flex-end' }}>
+                            <Text style={[styles.pagarValue, f.status_display === 'atrasado' && { color: colors.error }]}>{money(f.amount)}</Text>
+                            <Text style={styles.movUser}>Venc. {brDate(f.due_date)}</Text>
+                          </View>
+                        </View>
+                      ))
+                    )}
+                  </View>
+                </View>
+
+                <View style={styles.colNarrow}>
+                  <View style={styles.panel} testID="desktop-autorizacoes">
+                    <View style={styles.panelHead}>
+                      <Text style={styles.panelTitle}>Autorizações vigentes hoje</Text>
+                      <Pressable onPress={() => router.push('/admin-solicitacoes')} testID="see-all-auth"><Text style={styles.panelLink}>Ver tudo</Text></Pressable>
+                    </View>
+                    {autorizacoesHoje.length === 0 ? (
+                      <Text style={styles.emptyLine}>Nenhuma autorização vigente hoje.</Text>
+                    ) : (
+                      autorizacoesHoje.slice(0, 6).map((a) => (
+                        <View key={a.id} style={styles.emgRow} testID={`desktop-auth-${a.id}`}>
+                          <Ionicons name="shield-checkmark" size={18} color={colors.success} />
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.emgName}>{a.person_name} · {a.boat_name}</Text>
+                            <Text style={styles.emgMeta}>{a.user_name} • {authValidityLabel(a)}</Text>
+                          </View>
+                        </View>
+                      ))
+                    )}
+                  </View>
+                </View>
+              </View>
+
+              {/* Equipe */}
+              <Text style={styles.blockKicker}>EQUIPE</Text>
+              <View style={[styles.panel, { marginBottom: spacing.lg }]} testID="desktop-equipe">
+                <View style={styles.panelHead}>
+                  <Text style={styles.panelTitle}>Funcionários no dia</Text>
+                  <Pressable onPress={() => router.push('/admin-ponto')} testID="see-all-ponto"><Text style={styles.panelLink}>Ver tudo</Text></Pressable>
+                </View>
+                {equipeHoje.length === 0 ? (
+                  <Text style={styles.emptyLine}>Nenhum ponto registrado hoje ainda.</Text>
+                ) : (
+                  equipeHoje.map((emp) => (
+                    <View key={emp.cpf} style={styles.equipeRow} testID={`desktop-equipe-${emp.cpf}`}>
+                      <View style={[styles.equipeStatusDot, { backgroundColor: emp.working ? colors.success : colors.onSurfaceTertiary }]} />
+                      <View style={{ minWidth: 160 }}>
+                        <Text style={styles.movBoat}>{emp.name}</Text>
+                        <Text style={[styles.movUser, emp.working && { color: colors.success, fontWeight: '700' }]}>
+                          {emp.working ? 'Trabalhando agora' : 'Expediente encerrado'}
+                        </Text>
+                      </View>
+                      <View style={styles.equipePunches}>
+                        {PONTO_ORDER.map((t) => {
+                          const entry = emp.entries.find((e) => e.type === t);
+                          return (
+                            <View key={t} style={[styles.punchChip, !entry && styles.punchChipEmpty]}>
+                              <Text style={[styles.punchLabel, !entry && styles.punchLabelEmpty]}>{PONTO_LABELS[t]}</Text>
+                              <Text style={[styles.punchTime, !entry && styles.punchLabelEmpty]}>{entry ? entry.time : '—'}</Text>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  ))
+                )}
+              </View>
+
               {/* Resumo semanal */}
-              <View style={[styles.panel, { marginTop: spacing.lg }]} testID="desktop-weekly">
+              <Text style={styles.blockKicker}>DESEMPENHO SEMANAL</Text>
+              <View style={styles.panel} testID="desktop-weekly">
                 <View style={styles.panelHead}>
                   <Text style={styles.panelTitle}>Resumo dos últimos 7 dias</Text>
                 </View>
@@ -337,4 +477,24 @@ const styles = StyleSheet.create({
   bar: { width: 14, borderTopLeftRadius: 3, borderTopRightRadius: 3 },
   chartDay: { color: colors.onSurface, fontSize: typography.sm, fontWeight: '700', marginTop: 4 },
   chartRev: { color: colors.onSurfaceTertiary, fontSize: 11 },
+  blockKicker: {
+    color: colors.onSurfaceTertiary,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 1.5,
+    marginBottom: spacing.sm,
+    marginTop: spacing.xl,
+  },
+  panelSub: { color: colors.onSurfaceSecondary, fontSize: typography.sm, marginTop: 2 },
+  pagarRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: spacing.md, borderTopWidth: 1, borderTopColor: colors.border },
+  pagarDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#B45309' },
+  pagarValue: { color: colors.onSurface, fontSize: typography.base, fontWeight: '800' },
+  equipeRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg, paddingVertical: spacing.md, borderTopWidth: 1, borderTopColor: colors.border, flexWrap: 'wrap' },
+  equipeStatusDot: { width: 10, height: 10, borderRadius: 5 },
+  equipePunches: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, flex: 1 },
+  punchChip: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, minWidth: 108, alignItems: 'center' },
+  punchChipEmpty: { borderStyle: 'dashed' },
+  punchLabel: { color: colors.onSurfaceSecondary, fontSize: 10, fontWeight: '700', letterSpacing: 0.4, textTransform: 'uppercase' },
+  punchLabelEmpty: { color: colors.onSurfaceTertiary },
+  punchTime: { color: colors.onSurface, fontSize: typography.base, fontWeight: '800', marginTop: 2 },
 });

@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Haptics from 'expo-haptics';
 import { colors, spacing, radius, typography } from '@/src/theme';
 import { api, isAuthValidOn, authValidityLabel } from '@/src/api';
 import type { Authorization } from '@/src/api';
@@ -13,6 +14,8 @@ function todayISO() {
   const p = (n: number) => n.toString().padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
+const fmtTime = (iso: string) =>
+  new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
 export default function StaffAutorizacoesScreen() {
   const router = useRouter();
@@ -37,6 +40,13 @@ export default function StaffAutorizacoesScreen() {
 
   useFocusEffect(useCallback(() => { setLoading(true); load(); }, [load]));
 
+  const checkinAuth = async (id: string) => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    const nowIso = new Date().toISOString();
+    setAuths((prev) => prev.map((a) => (a.id === id ? { ...a, entered_at: nowIso } : a)));
+    try { await api.checkinAuthorization(id); } catch { load(); }
+  };
+
   return (
     <SafeAreaView style={styles.root} edges={['top']} testID="staff-autorizacoes-screen">
       <View style={styles.header}>
@@ -46,7 +56,7 @@ export default function StaffAutorizacoesScreen() {
         <View style={{ flex: 1 }}>
           <Text style={styles.kicker}>FUNCIONÁRIOS</Text>
           <Text style={styles.title} testID="autorizacoes-title">Pessoas Autorizadas</Text>
-          <Text style={styles.sub}>Válidas hoje • somente consulta</Text>
+          <Text style={styles.sub}>Válidas hoje • toque em "Registrar entrada" quando a pessoa chegar</Text>
         </View>
       </View>
 
@@ -85,10 +95,20 @@ export default function StaffAutorizacoesScreen() {
                     {item.entered_at ? (
                       <View style={[styles.tag, { backgroundColor: '#DCFCE7' }]}>
                         <Ionicons name="checkmark-circle" size={12} color={colors.success} />
-                        <Text style={[styles.tagText, { color: colors.success }]}>Já entrou</Text>
+                        <Text style={[styles.tagText, { color: colors.success }]}>Entrou às {fmtTime(item.entered_at)}</Text>
                       </View>
                     ) : null}
                   </View>
+                  {!item.entered_at ? (
+                    <Pressable
+                      testID={`staff-auth-checkin-${item.id}`}
+                      onPress={() => checkinAuth(item.id)}
+                      style={({ pressed }) => [styles.checkinBtn, pressed && { opacity: 0.85 }]}
+                    >
+                      <Ionicons name="log-in-outline" size={16} color="#FFFFFF" />
+                      <Text style={styles.checkinBtnText}>Registrar entrada</Text>
+                    </Pressable>
+                  ) : null}
                 </View>
               </View>
             )}
@@ -118,4 +138,6 @@ const styles = StyleSheet.create({
   tagsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.sm },
   tag: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radius.pill },
   tagText: { fontSize: typography.sm, fontWeight: '700' },
+  checkinBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs, backgroundColor: colors.success, borderRadius: radius.sm, paddingVertical: spacing.sm, marginTop: spacing.md },
+  checkinBtnText: { color: '#FFFFFF', fontSize: typography.sm, fontWeight: '700' },
 });

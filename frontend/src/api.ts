@@ -1,6 +1,15 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
 
-export type Boat = { name: string; draft?: number | null; length?: number | null };
+export type Boat = {
+  name: string;
+  draft?: number | null;
+  length?: number | null;
+  monthly_fee?: number | null;
+  monthly_fee_valid_until?: string | null; // YYYY-MM-DD
+  mensalidade_due_day?: number | null; // dia do mês (1-31) de vencimento da mensalidade
+};
 
 export function boatName(b: Boat | string): string {
   return typeof b === 'string' ? b : b.name;
@@ -14,7 +23,27 @@ export type User = {
   boats?: (Boat | string)[];
   is_admin?: boolean;
   is_staff?: boolean;
+  // Session token issued by POST /login. Screens already persist the whole
+  // login response under the 'user' key in AsyncStorage, so this field rides
+  // along for free — req() below reads it back out from there to attach
+  // "Authorization: Bearer <token>" on every call.
+  token?: string;
 };
+
+/** Best-effort read of the token saved at login. Never throws: a missing or
+ * unparsable 'user' entry just means the request goes out unauthenticated,
+ * which is correct for endpoints that don't require a session (and will
+ * surface as a 401 from the backend for the ones that do). */
+async function authHeader(): Promise<Record<string, string>> {
+  try {
+    const raw = await AsyncStorage.getItem('user');
+    if (!raw) return {};
+    const user = JSON.parse(raw);
+    return user?.token ? { Authorization: `Bearer ${user.token}` } : {};
+  } catch {
+    return {};
+  }
+}
 
 export type RequestType = 'descida' | 'subida';
 export type RequestStatus = 'agendada' | 'cancelada' | 'concluida';
@@ -41,10 +70,12 @@ export type MarinaRequest = {
 };
 
 async function req<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const auth = await authHeader();
   const res = await fetch(`${BASE}/api${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      ...auth,
       ...(options.headers || {}),
     },
   });
@@ -88,17 +119,18 @@ export const api = {
   slots: (type: RequestType, date: string) =>
     req<SlotInfo[]>(`/slots?type=${type}&date=${date}`),
   getTides: (date: string) => req<TideDay>(`/tides/${date}`),
-  setTides: (date: string, points: { time: string; height: number }[]) =>
-    req<TideDay>(`/tides/${date}`, { method: 'PUT', body: JSON.stringify({ points }) }),
   listUsers: () => req<Client[]>('/users'),
   createClient: (data: { cpf: string; name: string; phone: string; boats: Boat[]; is_staff?: boolean }) =>
     req<Client>('/users', { method: 'POST', body: JSON.stringify(data) }),
   setUserActive: (cpf: string, active: boolean) =>
     req<Client>(`/users/${cpf}/active`, { method: 'PATCH', body: JSON.stringify({ active }) }),
-  addBoat: (cpf: string, boat: { name: string; draft?: number | null; length?: number | null }) =>
+  addBoat: (cpf: string, boat: { name: string; draft?: number | null; length?: number | null; monthly_fee?: number | null; monthly_fee_valid_until?: string | null; mensalidade_due_day?: number | null }) =>
     req<Client>(`/users/${cpf}/boats`, { method: 'POST', body: JSON.stringify(boat) }),
+  updateBoat: (cpf: string, name: string, data: Partial<{ draft: number | null; length: number | null; monthly_fee: number | null; monthly_fee_valid_until: string | null; mensalidade_due_day: number | null }>) =>
+    req<Client>(`/users/${cpf}/boats/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(data) }),
   removeBoat: (cpf: string, boat: string) =>
     req<Client>(`/users/${cpf}/boats?boat=${encodeURIComponent(boat)}`, { method: 'DELETE' }),
+  mensalidadesVencendo: (days = 30) => req<MensalidadeVencendo[]>(`/users/mensalidades/vencendo?days=${days}`),
   // Conveniência
   listProducts: (all = false) => req<Product[]>(`/products${all ? '?all=true' : ''}`),
   createProduct: (data: { name: string; price: number; category?: string }) =>
@@ -115,7 +147,8 @@ export const api = {
     } else {
       form.append('file', { uri, name: filename, type } as any);
     }
-    const res = await fetch(`${BASE}/api/products/${id}/image`, { method: 'POST', body: form });
+    const auth = await authHeader();
+    const res = await fetch(`${BASE}/api/products/${id}/image`, { method: 'POST', body: form, headers: auth });
     if (!res.ok) {
       let msg = 'Falha no upload';
       try { msg = (await res.json()).detail || msg; } catch {}
@@ -172,6 +205,19 @@ export const api = {
     req<Emergency>(`/emergencies/${id}/resolve`, { method: 'PATCH' }),
   cancelEmergency: (id: string) =>
     req<Emergency>(`/emergencies/${id}/cancel`, { method: 'PATCH' }),
+  // Serviços (lavagem, marinheiro, abastecimento)
+  createServico: (data: { cpf: string; boat_name?: string | null; type: ServicoType; desired_date?: string | null; desired_time?: string | null; observation?: string | null }) =>
+    req<Servico>('/servicos', { method: 'POST', body: JSON.stringify(data) }),
+  listServicos: (params?: { cpf?: string; status?: ServicoStatus }) => {
+    const qs = new URLSearchParams();
+    if (params?.cpf) qs.set('cpf', params.cpf);
+    if (params?.status) qs.set('status', params.status);
+    const s = qs.toString();
+    return req<Servico[]>(`/servicos${s ? `?${s}` : ''}`);
+  },
+  setServicoStatus: (id: string, status: ServicoStatus) =>
+    req<Servico>(`/servicos/${id}/status?status=${status}`, { method: 'PATCH' }),
+  cancelServico: (id: string) => req<Servico>(`/servicos/${id}/cancel`, { method: 'PATCH' }),
   consumoReport: (month?: string, cpf?: string) => {
     const qs = new URLSearchParams();
     if (month) qs.set('month', month);
@@ -183,6 +229,134 @@ export const api = {
     req<Statement>('/statements/send', { method: 'POST', body: JSON.stringify({ cpf, month }) }),
   listStatements: (cpf?: string) => req<Statement[]>(`/statements${cpf ? `?cpf=${cpf}` : ''}`),
   readStatement: (id: string) => req<{ ok: boolean }>(`/statements/${id}/read`, { method: 'PATCH' }),
+  // Fatura mensal (mensalidade + consumo, fechada na data de pagamento da lancha)
+  faturaPreview: (cpf: string, boatName?: string) => {
+    const qs = new URLSearchParams({ cpf });
+    if (boatName) qs.set('boat_name', boatName);
+    return req<FaturaPreviewResponse>(`/fatura/preview?${qs.toString()}`);
+  },
+  listFaturas: (cpf?: string) => req<Fatura[]>(`/faturas${cpf ? `?cpf=${cpf}` : ''}`),
+  readFatura: (id: string) => req<{ ok: boolean }>(`/faturas/${id}/read`, { method: 'PATCH' }),
+  // Ponto Eletrônico
+  baterPonto: (type: PontoType) =>
+    req<PontoEntry>('/ponto', { method: 'POST', body: JSON.stringify({ type }) }),
+  listPonto: (params?: { cpf?: string; date_from?: string; date_to?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.cpf) qs.set('cpf', params.cpf);
+    if (params?.date_from) qs.set('date_from', params.date_from);
+    if (params?.date_to) qs.set('date_to', params.date_to);
+    const s = qs.toString();
+    return req<PontoEntry[]>(`/ponto${s ? `?${s}` : ''}`);
+  },
+  updatePonto: (id: string, data: { date?: string; time?: string }) =>
+    req<PontoEntry>(`/ponto/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deletePonto: (id: string) => req<{ ok: boolean }>(`/ponto/${id}`, { method: 'DELETE' }),
+  relatorioPonto: (dateFrom: string, dateTo: string, cpf?: string) => {
+    const qs = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
+    if (cpf) qs.set('cpf', cpf);
+    return req<PontoRelatorio>(`/ponto/relatorio?${qs.toString()}`);
+  },
+  // Escala de Trabalho
+  createEscala: (data: { date: string; cpf: string; observation?: string | null }) =>
+    req<EscalaEntry>('/escala', { method: 'POST', body: JSON.stringify(data) }),
+  listEscala: (params?: { month?: string; cpf?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.month) qs.set('month', params.month);
+    if (params?.cpf) qs.set('cpf', params.cpf);
+    const s = qs.toString();
+    return req<EscalaEntry[]>(`/escala${s ? `?${s}` : ''}`);
+  },
+  deleteEscala: (id: string) => req<{ ok: boolean }>(`/escala/${id}`, { method: 'DELETE' }),
+  listEscalaStaff: () => req<EscalaStaffMember[]>('/escala/staff'),
+  gerarEscala: (data: { cpf: string; month: string; start_with?: 'seis' | 'cinco' }) =>
+    req<EscalaGerarResult>('/escala/gerar', { method: 'POST', body: JSON.stringify(data) }),
+  // Encomendas
+  getEncomendaTaxa: () => req<{ value: number }>('/encomendas/taxa'),
+  setEncomendaTaxa: (value: number) => req<{ value: number }>('/encomendas/taxa', { method: 'PUT', body: JSON.stringify({ value }) }),
+  createEncomenda: (data: { cpf: string; boat_name?: string | null; description?: string | null; received_at?: string | null }) =>
+    req<Encomenda>('/encomendas', { method: 'POST', body: JSON.stringify(data) }),
+  listEncomendas: (params?: { cpf?: string; status?: EncomendaStatus }) => {
+    const qs = new URLSearchParams();
+    if (params?.cpf) qs.set('cpf', params.cpf);
+    if (params?.status) qs.set('status', params.status);
+    const s = qs.toString();
+    return req<Encomenda[]>(`/encomendas${s ? `?${s}` : ''}`);
+  },
+  entregarEncomenda: (id: string, receivedByName: string) =>
+    req<Encomenda>(`/encomendas/${id}/entregar`, { method: 'PATCH', body: JSON.stringify({ received_by_name: receivedByName }) }),
+  uploadEncomendaPhoto: async (id: string, uri: string, filename: string, type: string) => {
+    const form = new FormData();
+    if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+      const blob = await (await fetch(uri)).blob();
+      form.append('file', blob, filename);
+    } else {
+      form.append('file', { uri, name: filename, type } as any);
+    }
+    const auth = await authHeader();
+    const res = await fetch(`${BASE}/api/encomendas/${id}/photo`, { method: 'POST', body: form, headers: auth });
+    if (!res.ok) {
+      let msg = 'Falha no upload';
+      try { msg = (await res.json()).detail || msg; } catch {}
+      throw new Error(msg);
+    }
+    return res.json() as Promise<Encomenda>;
+  },
+  // Painel Financeiro
+  financeiroCategorias: () => req<{ pagar: string[]; receber: string[] }>('/financeiro/categorias'),
+  createFinanceiro: (data: {
+    kind: FinanceiroKind;
+    description: string;
+    category: string;
+    amount: number;
+    due_date: string;
+    cpf?: string | null;
+    boat_name?: string | null;
+    supplier_name?: string | null;
+    observation?: string | null;
+    recurring?: boolean;
+    recurring_day?: number;
+    recurring_end_date?: string | null;
+  }) => req<FinanceiroEntry>('/financeiro', { method: 'POST', body: JSON.stringify(data) }),
+  listFinanceiro: (params?: { kind?: FinanceiroKind; status?: FinanceiroStatus; month?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.kind) qs.set('kind', params.kind);
+    if (params?.status) qs.set('status', params.status);
+    if (params?.month) qs.set('month', params.month);
+    const s = qs.toString();
+    return req<FinanceiroEntry[]>(`/financeiro${s ? `?${s}` : ''}`);
+  },
+  updateFinanceiro: (id: string, data: Partial<{ description: string; category: string; amount: number; due_date: string; observation: string | null }>) =>
+    req<FinanceiroEntry>(`/financeiro/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  payFinanceiro: (id: string, paidAmount?: number) =>
+    req<FinanceiroEntry>(`/financeiro/${id}/pay`, { method: 'PATCH', body: JSON.stringify(paidAmount != null ? { paid_amount: paidAmount } : {}) }),
+  reopenFinanceiro: (id: string) => req<FinanceiroEntry>(`/financeiro/${id}/reabrir`, { method: 'PATCH' }),
+  deleteFinanceiro: (id: string) => req<{ ok: boolean }>(`/financeiro/${id}`, { method: 'DELETE' }),
+  resumoFinanceiro: (month?: string) => req<FinanceiroResumo>(`/financeiro/resumo${month ? `?month=${month}` : ''}`),
+  analiseFinanceira: (dateFrom: string, dateTo: string) =>
+    req<AnaliseFinanceira>(`/financeiro/analise?date_from=${dateFrom}&date_to=${dateTo}`),
+  // Fornecedores
+  createFornecedor: (data: { name: string; category?: string | null; phone?: string | null; email?: string | null; document?: string | null; observation?: string | null }) =>
+    req<Fornecedor>('/fornecedores', { method: 'POST', body: JSON.stringify(data) }),
+  listFornecedores: (active?: boolean) => req<Fornecedor[]>(`/fornecedores${active != null ? `?active=${active}` : ''}`),
+  updateFornecedor: (id: string, data: Partial<{ name: string; category: string | null; phone: string | null; email: string | null; document: string | null; observation: string | null }>) =>
+    req<Fornecedor>(`/fornecedores/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  setFornecedorActive: (id: string, active: boolean) =>
+    req<Fornecedor>(`/fornecedores/${id}/active`, { method: 'PATCH', body: JSON.stringify({ active }) }),
+  deleteFornecedor: (id: string) => req<{ ok: boolean }>(`/fornecedores/${id}`, { method: 'DELETE' }),
+  // Recorrências (cobranças/pagamentos automáticos mês a mês)
+  listRecorrencias: (kind?: FinanceiroKind) => req<Recorrencia[]>(`/financeiro/recorrencias${kind ? `?kind=${kind}` : ''}`),
+  setRecorrenciaActive: (id: string, active: boolean) =>
+    req<Recorrencia>(`/financeiro/recorrencias/${id}/active`, { method: 'PATCH', body: JSON.stringify({ active }) }),
+  deleteRecorrencia: (id: string) => req<{ ok: boolean }>(`/financeiro/recorrencias/${id}`, { method: 'DELETE' }),
+  // Lista de compras (conveniência)
+  createCompraItem: (data: { name: string; quantity?: string | null; observation?: string | null }) =>
+    req<CompraItem>('/lista-compras', { method: 'POST', body: JSON.stringify(data) }),
+  listCompraItems: (done?: boolean) => req<CompraItem[]>(`/lista-compras${done != null ? `?done=${done}` : ''}`),
+  updateCompraItem: (id: string, data: Partial<{ name: string; quantity: string | null; observation: string | null }>) =>
+    req<CompraItem>(`/lista-compras/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  setCompraItemDone: (id: string, done: boolean) =>
+    req<CompraItem>(`/lista-compras/${id}/done`, { method: 'PATCH', body: JSON.stringify({ done }) }),
+  deleteCompraItem: (id: string) => req<{ ok: boolean }>(`/lista-compras/${id}`, { method: 'DELETE' }),
 };
 
 export type Product = { id: string; name: string; price: number; active: boolean; in_stock: boolean; category: string; image_url?: string | null };
@@ -239,6 +413,7 @@ export type AppNotification = {
   title: string;
   body: string;
   kind: string;
+  ref_id?: string | null;
   read: boolean;
   created_at: string;
 };
@@ -268,6 +443,29 @@ export function authValidityLabel(a: Authorization): string {
   if (vtype === 'periodo') return `${br(a.start_date)} até ${br(a.end_date)}`;
   return br(a.date);
 }
+export type ServicoType = 'lavagem' | 'marinheiro' | 'abastecimento';
+export type ServicoStatus = 'pendente' | 'em_andamento' | 'concluido' | 'cancelado';
+
+export const SERVICO_LABELS: Record<ServicoType, string> = {
+  lavagem: 'Lavagem de Lancha',
+  marinheiro: 'Marinheiro',
+  abastecimento: 'Abastecimento de Combustível',
+};
+
+export type Servico = {
+  id: string;
+  cpf: string;
+  user_name: string;
+  boat_name?: string | null;
+  type: ServicoType;
+  desired_date?: string | null;
+  desired_time?: string | null;
+  observation?: string | null;
+  status: ServicoStatus;
+  created_at: string;
+  updated_at: string;
+};
+
 export type Emergency = {
   id: string;
   kind?: 'socorro' | 'reboque';
@@ -328,6 +526,33 @@ export type Statement = {
   sent_at: string;
 };
 
+export type FaturaOrder = { id: string; total: number; created_at: string; items: { name: string; price: number; qty: number }[] };
+export type FaturaReboque = { id: string; amount: number; billed_at?: string | null };
+
+export type FaturaBase = {
+  boat_name: string;
+  period_start: string; // YYYY-MM-DD
+  period_end: string; // YYYY-MM-DD
+  due_date: string; // YYYY-MM-DD
+  mensalidade: number;
+  convenience_total: number;
+  reboque_total: number;
+  total: number;
+  orders: FaturaOrder[];
+  reboques: FaturaReboque[];
+};
+
+export type FaturaPreview = FaturaBase & { send_date: string };
+export type FaturaPreviewResponse = { cpf: string; user_name: string; faturas: FaturaPreview[] };
+
+export type Fatura = FaturaBase & {
+  id: string;
+  cpf: string;
+  user_name: string;
+  read: boolean;
+  sent_at: string;
+};
+
 export type SlotInfo = {
   time: string;
   count: number;
@@ -346,4 +571,156 @@ export type Client = {
   boat_name?: string;
   is_staff?: boolean;
   active?: boolean;
+};
+
+export type MensalidadeVencendo = {
+  cpf: string;
+  client_name: string;
+  boat_name: string;
+  monthly_fee?: number | null;
+  valid_until: string; // YYYY-MM-DD
+  days_remaining: number;
+};
+
+export type PontoType = 'entrada' | 'saida_almoco' | 'retorno_almoco' | 'saida_final';
+
+export const PONTO_LABELS: Record<PontoType, string> = {
+  entrada: 'Entrada',
+  saida_almoco: 'Saída Almoço',
+  retorno_almoco: 'Retorno Almoço',
+  saida_final: 'Saída Final',
+};
+
+export type PontoEntry = {
+  id: string;
+  cpf: string;
+  user_name: string;
+  type: PontoType;
+  date: string; // YYYY-MM-DD
+  time: string; // HH:MM
+  edited: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PontoRelatorioDia = { date: string; hours: number } & Partial<Record<PontoType, string>>;
+export type PontoRelatorioFuncionario = { cpf: string; name: string; total_hours: number; days: PontoRelatorioDia[] };
+export type PontoRelatorio = { date_from: string; date_to: string; employees: PontoRelatorioFuncionario[] };
+
+export type EscalaStaffMember = { cpf: string; name: string };
+
+export type EncomendaStatus = 'aguardando' | 'entregue';
+
+export type Encomenda = {
+  id: string;
+  cpf: string;
+  client_name: string;
+  boat_name?: string | null;
+  description?: string | null;
+  received_at: string;
+  fee: number;
+  photo_url?: string | null;
+  status: EncomendaStatus;
+  delivered_at?: string | null;
+  received_by_name?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EscalaGerarResult = {
+  created: EscalaEntry[];
+  skipped: { date: string; reason: string }[];
+};
+
+export type EscalaEntry = {
+  id: string;
+  date: string; // YYYY-MM-DD
+  cpf: string;
+  user_name: string;
+  observation?: string | null;
+  created_at: string;
+};
+
+export type FinanceiroKind = 'pagar' | 'receber';
+export type FinanceiroStatus = 'pendente' | 'atrasado' | 'pago';
+
+export type FinanceiroEntry = {
+  id: string;
+  kind: FinanceiroKind;
+  description: string;
+  category: string;
+  amount: number;
+  due_date: string; // YYYY-MM-DD
+  cpf?: string | null;
+  client_name?: string | null;
+  boat_name?: string | null;
+  supplier_name?: string | null;
+  observation?: string | null;
+  status: 'pendente' | 'pago';
+  status_display: FinanceiroStatus;
+  paid_amount?: number | null;
+  paid_at?: string | null;
+  recurring_id?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type FinanceiroTotals = { pendente: number; atrasado: number; pago: number };
+export type FinanceiroResumo = {
+  month: string;
+  pagar: FinanceiroTotals;
+  receber: FinanceiroTotals;
+  saldo_previsto: number;
+};
+
+export type Fornecedor = {
+  id: string;
+  name: string;
+  category?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  document?: string | null;
+  observation?: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AnaliseCategoria = { category: string; total: number };
+export type AnaliseMes = { month: string; pagar: number; receber: number };
+export type AnaliseFinanceira = {
+  date_from: string;
+  date_to: string;
+  receber: { total: number; by_category: AnaliseCategoria[] };
+  pagar: { total: number; by_category: AnaliseCategoria[] };
+  saldo: number;
+  by_month: AnaliseMes[];
+};
+
+export type CompraItem = {
+  id: string;
+  name: string;
+  quantity?: string | null;
+  observation?: string | null;
+  done: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Recorrencia = {
+  id: string;
+  kind: FinanceiroKind;
+  description: string;
+  category: string;
+  amount: number;
+  day: number;
+  end_date?: string | null; // YYYY-MM-DD; null/ausente = recorrente até cancelar
+  cpf?: string | null;
+  client_name?: string | null;
+  boat_name?: string | null;
+  supplier_name?: string | null;
+  observation?: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
 };

@@ -9,7 +9,6 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
-  Alert,
   Image,
   Linking,
 } from 'react-native';
@@ -22,6 +21,7 @@ import { colors, spacing, radius, typography } from '@/src/theme';
 import { api, fileUrl, PRODUCT_CATEGORIES } from '@/src/api';
 import type { Product, ProductCategory } from '@/src/api';
 import { categoryMeta } from '@/src/categories';
+import { AppDialog, type DialogButton } from '@/src/components/AppDialog';
 
 import { formatMoney as money } from '@/src/format';
 
@@ -35,6 +35,10 @@ export default function AdminProdutosScreen() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploadingId, setUploadingId] = useState<string | null>(null);
+  const [dialog, setDialog] = useState<{ title: string; message?: string; buttons: DialogButton[] } | null>(null);
+  const closeDialog = () => setDialog(null);
+  const showInfo = (title: string, message?: string) =>
+    setDialog({ title, message, buttons: [{ label: 'OK', variant: 'primary', onPress: closeDialog }] });
 
   const load = useCallback(async () => {
     try {
@@ -81,14 +85,14 @@ export default function AdminProdutosScreen() {
         status = req.status;
       }
       if (status !== 'granted') {
-        Alert.alert(
-          'Permissão necessária',
-          'Precisamos acessar suas fotos para escolher a imagem do produto.',
-          [
-            { text: 'Cancelar', style: 'cancel' },
-            { text: 'Abrir Ajustes', onPress: () => Linking.openSettings() },
-          ]
-        );
+        setDialog({
+          title: 'Permissão necessária',
+          message: 'Precisamos acessar suas fotos para escolher a imagem do produto.',
+          buttons: [
+            { label: 'Cancelar', variant: 'cancel', onPress: closeDialog },
+            { label: 'Abrir Ajustes', variant: 'primary', onPress: () => { closeDialog(); Linking.openSettings(); } },
+          ],
+        });
         return;
       }
     }
@@ -108,7 +112,7 @@ export default function AdminProdutosScreen() {
       setProducts((prev) => prev.map((x) => (x.id === p.id ? updated : x)));
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (e: any) {
-      Alert.alert('Erro', e.message || 'Falha ao enviar a foto.');
+      showInfo('Erro', e.message || 'Falha ao enviar a foto.');
     } finally {
       setUploadingId(null);
     }
@@ -128,17 +132,23 @@ export default function AdminProdutosScreen() {
   };
 
   const remove = (p: Product) => {
-    Alert.alert('Remover produto', `Remover "${p.name}"?`, [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Remover',
-        style: 'destructive',
-        onPress: async () => {
-          setProducts((prev) => prev.filter((x) => x.id !== p.id));
-          try { await api.deleteProduct(p.id); } catch { load(); }
+    setDialog({
+      title: 'Remover produto',
+      message: `Remover "${p.name}"?`,
+      buttons: [
+        { label: 'Cancelar', variant: 'cancel', onPress: closeDialog },
+        {
+          label: 'Remover',
+          variant: 'destructive',
+          testID: `confirm-remove-${p.id}`,
+          onPress: async () => {
+            closeDialog();
+            setProducts((prev) => prev.filter((x) => x.id !== p.id));
+            try { await api.deleteProduct(p.id); } catch { load(); }
+          },
         },
-      },
-    ]);
+      ],
+    });
   };
 
   return (
@@ -241,6 +251,14 @@ export default function AdminProdutosScreen() {
           />
         )}
       </KeyboardAvoidingView>
+      <AppDialog
+        visible={!!dialog}
+        title={dialog?.title || ''}
+        message={dialog?.message}
+        buttons={dialog?.buttons || []}
+        onRequestClose={closeDialog}
+        testID="produtos-dialog"
+      />
     </SafeAreaView>
   );
 }
