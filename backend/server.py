@@ -2058,6 +2058,90 @@ async def delete_escala(eid: str):
     return {"ok": True}
 
 
+class EscalaGerarInput(BaseModel):
+    cpf: str
+    month: str  # YYYY-MM
+    start_with: Literal["seis", "cinco"] = "seis"  # padrão da 1ª semana, só usado sem histórico
+
+
+@api_router.post("/escala/gerar", dependencies=[Depends(require_admin)])
+async def gerar_escala_mes(payload: EscalaGerarInput):
+    """Preenche automaticamente a escala de um funcionário pro mês inteiro,
+    intercalando semanas de 6 e 5 dias (domingo-sábado) e garantindo folga
+    em pelo menos 1 domingo por mês:
+    - Semana de 6 dias: folga só na segunda-feira.
+    - Semana de 5 dias: folga no domingo e na segunda-feira.
+    Como toda semana de 5 dias já inclui domingo de folga, a regra do
+    domingo fica satisfeita naturalmente pela intercalação.
+    Dias que esse funcionário já tem escala (cadastrados manualmente ou
+    numa geração anterior) são mantidos como estão, nunca sobrescritos.
+    Cada dia ainda passa pela mesma validação usada no cadastro manual —
+    se algo já cadastrado deixar um dia inviável, esse dia é reportado em
+    "skipped" com o motivo, e a geração continua pros demais dias."""
+    cpf = normalize_cpf(payload.cpf)
+    user = await db.users.find_one({"cpf": cpf, "is_staff": True}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Funcionário não encontrado.")
+    try:
+        year, mon = int(payload.month[:4]), int(payload.month[5:7])
+        month_start = date_cls(year, mon, 1)
+    except (ValueError, IndexError):
+        raise HTTPException(status_code=400, detail="Mês inválido. Use o formato YYYY-MM.")
+    month_end = date_cls(year, mon, _days_in_month(year, mon))
+
+    week_start_of_month, _ = _week_bounds_sunday(month_start.isoformat())
+    prev_week_start = week_start_of_month - timedelta(days=7)
+    prev_week_end = week_start_of_month - timedelta(days=1)
+    prev_week_count = await db.escalas.count_documents(
+        {"cpf": cpf, "date": {"$gte": prev_week_start.isoformat(), "$lte": prev_week_end.isoformat()}}
+    )
+    if prev_week_count >= 6:
+        target = 5
+    elif prev_week_count > 0:
+        target = 6
+    else:
+        target = 6 if payload.start_with == "seis" else 5
+
+    existing = await db.escalas.find(
+        {"cpf": cpf, "date": {"$regex": f"^{payload.month}"}}, {"_id": 0, "date": 1}
+    ).to_list(100)
+    existing_dates = {e["date"] for e in existing}
+
+    created = []
+    skipped = []
+    cursor = week_start_of_month
+    while cursor <= month_end:
+        off_indices = {1} if target == 6 else {0, 1}  # 0=domingo, 1=segunda
+        for i in range(7):
+            day = cursor + timedelta(days=i)
+            if day < month_start or day > month_end or i in off_indices:
+                continue
+            iso = day.isoformat()
+            if iso in existing_dates:
+                continue
+            try:
+                await _validate_escala_rules(cpf, iso, user["name"])
+            except HTTPException as e:
+                skipped.append({"date": iso, "reason": e.detail})
+                continue
+            doc = {
+                "id": str(uuid.uuid4()),
+                "date": iso,
+                "cpf": cpf,
+                "user_name": user["name"],
+                "observation": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.escalas.insert_one(doc)
+            doc.pop("_id", None)
+            created.append(doc)
+            existing_dates.add(iso)
+        cursor += timedelta(days=7)
+        target = 5 if target == 6 else 6
+
+    return {"created": created, "skipped": skipped}
+
+
 # ===================== Painel Financeiro (Contas a Pagar / Receber) =====================
 FINANCEIRO_CATEGORIES_PAGAR = ["Fornecedores", "Manutenção", "Salários", "Utilidades", "Impostos", "Outros"]
 FINANCEIRO_CATEGORIES_RECEBER = ["Mensalidade", "Reboque", "Conveniência", "Serviços", "Outros"]

@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -59,6 +59,11 @@ export default function AdminEscalaScreen() {
   const closeDialog = () => setDialog(null);
   const showInfo = (title: string, message?: string) =>
     setDialog({ title, message, buttons: [{ label: 'OK', variant: 'primary', onPress: closeDialog }] });
+
+  const [showGenerate, setShowGenerate] = useState(false);
+  const [genName, setGenName] = useState<string | null>(null);
+  const [genStartWith, setGenStartWith] = useState<'seis' | 'cinco'>('seis');
+  const [generating, setGenerating] = useState(false);
 
   const ms = monthStr(year, month);
   const today = todayISO();
@@ -164,6 +169,35 @@ export default function AdminEscalaScreen() {
     });
   };
 
+  const openGenerate = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setGenName(null);
+    setGenStartWith('seis');
+    setShowGenerate(true);
+  };
+
+  const generateMonth = async () => {
+    if (!genName) return;
+    const person = staff.find((s) => s.name === genName);
+    if (!person) return;
+    setGenerating(true);
+    try {
+      const result = await api.gerarEscala({ cpf: person.cpf, month: ms, start_with: genStartWith });
+      setShowGenerate(false);
+      await load();
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      const parts = [`${result.created.length} dia(s) escalado(s) para ${person.name} em ${labelForMonth(year, month)}.`];
+      if (result.skipped.length > 0) {
+        parts.push(`${result.skipped.length} dia(s) não puderam ser preenchidos automaticamente (já tinham escala ou violariam as regras).`);
+      }
+      showInfo('Escala gerada', parts.join(' '));
+    } catch (e: any) {
+      showInfo('Erro', e.message || 'Não foi possível gerar a escala do mês.');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.root} edges={['top']} testID="admin-escala-screen">
       <View style={styles.header}>
@@ -174,6 +208,9 @@ export default function AdminEscalaScreen() {
           <Text style={styles.title} testID="escala-title">Escala de Trabalho</Text>
           <Text style={styles.subtitle}>Toque num dia pra escalar funcionários</Text>
         </View>
+        <Pressable onPress={openGenerate} hitSlop={12} testID="escala-generate-open" style={styles.generateBtn}>
+          <Ionicons name="sparkles-outline" size={20} color={colors.onBrandPrimary} />
+        </Pressable>
       </View>
 
       <View style={styles.monthNav}>
@@ -286,6 +323,60 @@ export default function AdminEscalaScreen() {
         </ScrollView>
       )}
 
+      <Modal visible={showGenerate} transparent animationType="fade" onRequestClose={() => setShowGenerate(false)}>
+        <View style={styles.backdrop}>
+          <View style={styles.formCard}>
+            <Text style={styles.formTitle}>Gerar escala do mês</Text>
+            <Text style={styles.generateInfo}>
+              Preenche {labelForMonth(year, month)} inteiro pra um funcionário, intercalando semanas de 6 e 5 dias
+              (folga na segunda; nas semanas de 5 dias, folga também no domingo). Dias já escalados não são alterados.
+            </Text>
+
+            <SelectField
+              testID="escala-generate-staff"
+              label="Funcionário"
+              value={genName}
+              options={staff.map((s) => s.name)}
+              onChange={setGenName}
+              placeholder="Selecione um funcionário"
+            />
+
+            <Text style={styles.fieldLabel}>Começar o mês com</Text>
+            <View style={styles.recurringEndToggle}>
+              <Pressable
+                testID="escala-generate-start-seis"
+                onPress={() => setGenStartWith('seis')}
+                style={[styles.toggleBtn, genStartWith === 'seis' && styles.toggleBtnActive]}
+              >
+                <Text style={[styles.toggleBtnText, genStartWith === 'seis' && styles.toggleBtnTextActive]}>Semana de 6 dias</Text>
+              </Pressable>
+              <Pressable
+                testID="escala-generate-start-cinco"
+                onPress={() => setGenStartWith('cinco')}
+                style={[styles.toggleBtn, genStartWith === 'cinco' && styles.toggleBtnActive]}
+              >
+                <Text style={[styles.toggleBtnText, genStartWith === 'cinco' && styles.toggleBtnTextActive]}>Semana de 5 dias</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.generateHint}>Só usado se o funcionário não tiver histórico de escala antes desse mês — senão o padrão continua automaticamente de onde parou.</Text>
+
+            <View style={styles.formActions}>
+              <Pressable testID="escala-generate-cancel" onPress={() => setShowGenerate(false)} style={[styles.formBtn, styles.formBtnCancel]}>
+                <Text style={styles.formBtnTextCancel}>Cancelar</Text>
+              </Pressable>
+              <Pressable
+                testID="escala-generate-confirm"
+                onPress={generateMonth}
+                disabled={!genName || generating}
+                style={[styles.formBtn, styles.formBtnPrimary, (!genName || generating) && { opacity: 0.5 }]}
+              >
+                {generating ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.formBtnTextSolid}>Gerar</Text>}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <AppDialog visible={!!dialog} title={dialog?.title || ''} message={dialog?.message} buttons={dialog?.buttons || []} onRequestClose={closeDialog} testID="escala-dialog" />
     </SafeAreaView>
   );
@@ -297,6 +388,7 @@ const styles = StyleSheet.create({
   title: { color: colors.onSurface, fontSize: typography.xxl, fontWeight: '800' },
   subtitle: { color: colors.onSurfaceSecondary, fontSize: typography.sm, marginTop: 2 },
   monthNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, marginBottom: spacing.md },
+  generateBtn: { width: 40, height: 40, borderRadius: radius.pill, backgroundColor: colors.brandPrimary, alignItems: 'center', justifyContent: 'center' },
   navBtn: { width: 36, height: 36, borderRadius: radius.pill, backgroundColor: colors.surfaceSecondary, alignItems: 'center', justifyContent: 'center' },
   monthLabel: { color: colors.onSurface, fontSize: typography.lg, fontWeight: '700', textTransform: 'capitalize' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
@@ -333,4 +425,21 @@ const styles = StyleSheet.create({
   escalaName: { flex: 1, color: colors.onSurface, fontSize: typography.base, fontWeight: '600' },
   addBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs, backgroundColor: colors.brandPrimary, borderRadius: radius.md, paddingVertical: spacing.md, marginTop: spacing.sm },
   addBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: typography.base },
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: spacing.xl },
+  formCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.xl },
+  formTitle: { color: colors.onSurface, fontSize: typography.xl, fontWeight: '800', marginBottom: spacing.sm },
+  generateInfo: { color: colors.onSurfaceSecondary, fontSize: typography.sm, marginBottom: spacing.lg, lineHeight: 18 },
+  fieldLabel: { color: colors.onSurface, fontSize: typography.base, fontWeight: '600', marginBottom: spacing.sm, marginTop: spacing.sm },
+  recurringEndToggle: { flexDirection: 'row', gap: spacing.sm },
+  toggleBtn: { flex: 1, paddingVertical: spacing.sm, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceSecondary, alignItems: 'center' },
+  toggleBtnActive: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
+  toggleBtnText: { color: colors.onSurfaceSecondary, fontSize: typography.sm, fontWeight: '700' },
+  toggleBtnTextActive: { color: colors.onBrandPrimary },
+  generateHint: { color: colors.onSurfaceTertiary, fontSize: 11, marginTop: spacing.sm, lineHeight: 15 },
+  formActions: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.lg },
+  formBtn: { flex: 1, paddingVertical: spacing.md, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
+  formBtnCancel: { backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border },
+  formBtnTextCancel: { color: colors.onSurfaceSecondary, fontWeight: '700' },
+  formBtnPrimary: { backgroundColor: colors.brandPrimary },
+  formBtnTextSolid: { color: '#FFFFFF', fontWeight: '700' },
 });

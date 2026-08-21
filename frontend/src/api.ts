@@ -268,6 +268,8 @@ export const api = {
   },
   deleteEscala: (id: string) => req<{ ok: boolean }>(`/escala/${id}`, { method: 'DELETE' }),
   listEscalaStaff: () => req<EscalaStaffMember[]>('/escala/staff'),
+  gerarEscala: (data: { cpf: string; month: string; start_with?: 'seis' | 'cinco' }) =>
+    req<EscalaGerarResult>('/escala/gerar', { method: 'POST', body: JSON.stringify(data) }),
   // Painel Financeiro
   financeiroCategorias: () => req<{ pagar: string[]; receber: string[] }>('/financeiro/categorias'),
   createFinanceiro: (data: {
@@ -574,6 +576,11 @@ export type PontoRelatorioFuncionario = { cpf: string; name: string; total_hours
 export type PontoRelatorio = { date_from: string; date_to: string; employees: PontoRelatorioFuncionario[] };
 
 export type EscalaStaffMember = { cpf: string; name: string };
+
+export type EscalaGerarResult = {
+  created: EscalaEntry[];
+  skipped: { date: string; reason: string }[];
+};
 
 export type EscalaEntry = {
   id: string;
