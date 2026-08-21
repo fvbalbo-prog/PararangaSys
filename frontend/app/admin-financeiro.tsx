@@ -80,6 +80,7 @@ export default function AdminFinanceiroScreen() {
   const [fDueDate, setFDueDate] = useState<Date | null>(new Date());
   const [fSupplierName, setFSupplierName] = useState<string | null>(null);
   const [fClientName, setFClientName] = useState<string | null>(null);
+  const [fBoatName, setFBoatName] = useState<string | null>(null);
   const [fObservation, setFObservation] = useState('');
   const [fRecurring, setFRecurring] = useState(false);
   const [fRecurringEndMode, setFRecurringEndMode] = useState<'indefinido' | 'data'>('indefinido');
@@ -181,6 +182,7 @@ export default function AdminFinanceiroScreen() {
     setFDueDate(new Date());
     setFSupplierName(null);
     setFClientName(null);
+    setFBoatName(null);
     setFObservation('');
     setFRecurring(false);
     setFRecurringEndMode('indefinido');
@@ -210,6 +212,7 @@ export default function AdminFinanceiroScreen() {
         amount,
         due_date: dateToISO(fDueDate),
         cpf: client?.cpf,
+        boat_name: client && fBoatName ? fBoatName : null,
         supplier_name: kind === 'pagar' ? fSupplierName : null,
         observation: fObservation.trim() || null,
         recurring: fRecurring,
@@ -427,6 +430,7 @@ export default function AdminFinanceiroScreen() {
                   <Text style={styles.entryMeta} numberOfLines={1}>
                     {e.category} · Venc. {brDate(e.due_date)}
                     {e.client_name ? ` · ${e.client_name}` : ''}
+                    {e.boat_name ? ` (${e.boat_name})` : ''}
                     {e.supplier_name ? ` · ${e.supplier_name}` : ''}
                   </Text>
                 </View>
@@ -503,9 +507,23 @@ export default function AdminFinanceiroScreen() {
                     label="Cliente (opcional)"
                     value={fClientName}
                     options={clients.map((c) => c.name)}
-                    onChange={setFClientName}
+                    onChange={(v) => { setFClientName(v); setFBoatName(null); }}
                     placeholder="Vincular a um cliente"
                   />
+                  {(() => {
+                    const selectedClient = fClientName ? clients.find((c) => c.name === fClientName) : null;
+                    if (!selectedClient || selectedClient.boats.length === 0) return null;
+                    return (
+                      <SelectField
+                        testID="financeiro-boat-select"
+                        label="Lancha (opcional)"
+                        value={fBoatName}
+                        options={selectedClient.boats.map((b) => b.name)}
+                        onChange={setFBoatName}
+                        placeholder="Vincular a uma lancha"
+                      />
+                    );
+                  })()}
                 </View>
               )}
 
@@ -609,7 +627,7 @@ export default function AdminFinanceiroScreen() {
                   <Text style={styles.detailLine}>Categoria: {selected.category}</Text>
                   <Text style={styles.detailLine}>Vencimento: {brDate(selected.due_date)}</Text>
                   <Text style={styles.detailLine}>Valor: {formatMoney(selected.amount)}</Text>
-                  {selected.client_name ? <Text style={styles.detailLine}>Cliente: {selected.client_name}</Text> : null}
+                  {selected.client_name ? <Text style={styles.detailLine}>Cliente: {selected.client_name}{selected.boat_name ? ` • Lancha: ${selected.boat_name}` : ''}</Text> : null}
                   {selected.supplier_name ? <Text style={styles.detailLine}>Fornecedor: {selected.supplier_name}</Text> : null}
                   {selected.observation ? <Text style={styles.detailLine}>Obs: {selected.observation}</Text> : null}
                   {selected.recurring_id ? (

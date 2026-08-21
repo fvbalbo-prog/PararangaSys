@@ -279,6 +279,7 @@ export const api = {
     amount: number;
     due_date: string;
     cpf?: string | null;
+    boat_name?: string | null;
     supplier_name?: string | null;
     observation?: string | null;
     recurring?: boolean;
@@ -603,6 +604,7 @@ export type FinanceiroEntry = {
   due_date: string; // YYYY-MM-DD
   cpf?: string | null;
   client_name?: string | null;
+  boat_name?: string | null;
   supplier_name?: string | null;
   observation?: string | null;
   status: 'pendente' | 'pago';
@@ -666,6 +668,7 @@ export type Recorrencia = {
   end_date?: string | null; // YYYY-MM-DD; null/ausente = recorrente até cancelar
   cpf?: string | null;
   client_name?: string | null;
+  boat_name?: string | null;
   supplier_name?: string | null;
   observation?: string | null;
   active: boolean;

@@ -2142,6 +2142,132 @@ async def gerar_escala_mes(payload: EscalaGerarInput):
     return {"created": created, "skipped": skipped}
 
 
+# ===================== Encomendas =====================
+ENCOMENDA_TAXA_KEY = "encomenda_taxa"
+
+
+async def _get_encomenda_taxa() -> float:
+    doc = await db.config.find_one({"key": ENCOMENDA_TAXA_KEY})
+    return round(doc["value"], 2) if doc else 0.0
+
+
+@api_router.get("/encomendas/taxa", dependencies=[Depends(require_staff)])
+async def get_encomenda_taxa():
+    return {"value": await _get_encomenda_taxa()}
+
+
+class EncomendaTaxaInput(BaseModel):
+    value: float
+
+
+@api_router.put("/encomendas/taxa", dependencies=[Depends(require_admin)])
+async def set_encomenda_taxa(payload: EncomendaTaxaInput):
+    if payload.value < 0:
+        raise HTTPException(status_code=400, detail="Valor da taxa não pode ser negativo.")
+    value = round(payload.value, 2)
+    await db.config.update_one(
+        {"key": ENCOMENDA_TAXA_KEY}, {"$set": {"key": ENCOMENDA_TAXA_KEY, "value": value}}, upsert=True
+    )
+    return {"value": value}
+
+
+class EncomendaInput(BaseModel):
+    cpf: str
+    boat_name: Optional[str] = None
+    description: Optional[str] = None
+    received_at: Optional[str] = None  # ISO datetime; default = agora
+
+
+@api_router.post("/encomendas", dependencies=[Depends(require_staff)])
+async def create_encomenda(payload: EncomendaInput):
+    cpf = normalize_cpf(payload.cpf)
+    user = await db.users.find_one({"cpf": cpf}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+    # Taxa é congelada no momento do recebimento — alterar a configuração
+    # depois não deve mudar o valor de encomendas já registradas.
+    taxa = await _get_encomenda_taxa()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "cpf": cpf,
+        "client_name": user["name"],
+        "boat_name": (payload.boat_name or "").strip() or None,
+        "description": (payload.description or "").strip() or None,
+        "received_at": (payload.received_at or now_iso),
+        "fee": taxa,
+        "photo_url": None,
+        "storage_path": None,
+        "status": "aguardando",
+        "delivered_at": None,
+        "received_by_name": None,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+    await db.encomendas.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/encomendas", dependencies=[Depends(require_staff)])
+async def list_encomendas(cpf: Optional[str] = None, status: Optional[str] = None):
+    query: dict = {}
+    if cpf:
+        query["cpf"] = normalize_cpf(cpf)
+    if status:
+        query["status"] = status
+    docs = await db.encomendas.find(query, {"_id": 0}).sort("received_at", -1).to_list(2000)
+    return docs
+
+
+@api_router.post("/encomendas/{eid}/photo", dependencies=[Depends(require_staff)])
+async def upload_encomenda_photo(eid: str, file: UploadFile = File(...)):
+    enc = await db.encomendas.find_one({"id": eid}, {"_id": 0})
+    if not enc:
+        raise HTTPException(status_code=404, detail="Encomenda não encontrada.")
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Arquivo vazio.")
+    ext = "jpg"
+    if file.filename and "." in file.filename:
+        ext = file.filename.rsplit(".", 1)[-1].lower()[:5]
+    path = f"{APP_NAME}/uploads/encomendas/{uuid.uuid4()}.{ext}"
+    content_type = file.content_type or "image/jpeg"
+    try:
+        await run_in_threadpool(put_object, path, content, content_type)
+    except Exception as e:
+        logger.error(f"Erro ao subir foto da encomenda: {e}")
+        raise HTTPException(status_code=502, detail="Falha ao enviar a foto.")
+    photo_url = f"/api/files/{path}"
+    await db.encomendas.update_one(
+        {"id": eid},
+        {"$set": {"photo_url": photo_url, "storage_path": path, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return await db.encomendas.find_one({"id": eid}, {"_id": 0})
+
+
+class EncomendaEntregaInput(BaseModel):
+    received_by_name: str
+
+
+@api_router.patch("/encomendas/{eid}/entregar", dependencies=[Depends(require_staff)])
+async def entregar_encomenda(eid: str, payload: EncomendaEntregaInput):
+    enc = await db.encomendas.find_one({"id": eid}, {"_id": 0})
+    if not enc:
+        raise HTTPException(status_code=404, detail="Encomenda não encontrada.")
+    if enc["status"] == "entregue":
+        raise HTTPException(status_code=400, detail="Encomenda já foi entregue.")
+    name = payload.received_by_name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Informe o nome de quem retirou a encomenda.")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.encomendas.update_one(
+        {"id": eid},
+        {"$set": {"status": "entregue", "delivered_at": now_iso, "received_by_name": name, "updated_at": now_iso}},
+    )
+    return await db.encomendas.find_one({"id": eid}, {"_id": 0})
+
+
 # ===================== Painel Financeiro (Contas a Pagar / Receber) =====================
 FINANCEIRO_CATEGORIES_PAGAR = ["Fornecedores", "Manutenção", "Salários", "Utilidades", "Impostos", "Outros"]
 FINANCEIRO_CATEGORIES_RECEBER = ["Mensalidade", "Reboque", "Conveniência", "Serviços", "Outros"]
@@ -2154,6 +2280,7 @@ class FinanceiroInput(BaseModel):
     amount: float
     due_date: str  # YYYY-MM-DD
     cpf: Optional[str] = None            # receber: cliente vinculado (opcional)
+    boat_name: Optional[str] = None      # receber: lancha do cliente vinculada (opcional)
     supplier_name: Optional[str] = None  # pagar: fornecedor (opcional)
     observation: Optional[str] = None
     recurring: bool = False              # ex.: mensalidade da lancha, cobrada todo mês
@@ -2190,12 +2317,18 @@ async def create_financeiro(payload: FinanceiroInput):
         raise HTTPException(status_code=400, detail="Descrição é obrigatória.")
     cpf = None
     client_name = None
+    boat_name = None
     if payload.cpf:
         cpf = normalize_cpf(payload.cpf)
         user = await db.users.find_one({"cpf": cpf}, {"_id": 0})
         if not user:
             raise HTTPException(status_code=404, detail="Cliente não encontrado.")
         client_name = user["name"]
+        if payload.boat_name:
+            boats = [b if isinstance(b, dict) else {"name": b} for b in user.get("boats", [])]
+            if not any(_boat_name(b) == payload.boat_name for b in boats):
+                raise HTTPException(status_code=400, detail="Lancha não encontrada para esse cliente.")
+            boat_name = payload.boat_name
     supplier_name = (payload.supplier_name or "").strip() or None
     now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -2221,6 +2354,7 @@ async def create_financeiro(payload: FinanceiroInput):
             "end_date": end_date,  # None = recorrente até cancelar
             "cpf": cpf,
             "client_name": client_name,
+            "boat_name": boat_name,
             "supplier_name": supplier_name,
             "observation": (payload.observation or "").strip() or None,
             "active": True,
@@ -2239,6 +2373,7 @@ async def create_financeiro(payload: FinanceiroInput):
         "due_date": payload.due_date,
         "cpf": cpf,
         "client_name": client_name,
+        "boat_name": boat_name,
         "supplier_name": supplier_name,
         "observation": (payload.observation or "").strip() or None,
         "status": "pendente",
@@ -2291,6 +2426,7 @@ async def _generate_recurring_for_month(month: str):
             "due_date": due_date,
             "cpf": r.get("cpf"),
             "client_name": r.get("client_name"),
+            "boat_name": r.get("boat_name"),
             "supplier_name": r.get("supplier_name"),
             "observation": r.get("observation"),
             "status": "pendente",
