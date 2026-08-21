@@ -270,6 +270,37 @@ export const api = {
   listEscalaStaff: () => req<EscalaStaffMember[]>('/escala/staff'),
   gerarEscala: (data: { cpf: string; month: string; start_with?: 'seis' | 'cinco' }) =>
     req<EscalaGerarResult>('/escala/gerar', { method: 'POST', body: JSON.stringify(data) }),
+  // Encomendas
+  getEncomendaTaxa: () => req<{ value: number }>('/encomendas/taxa'),
+  setEncomendaTaxa: (value: number) => req<{ value: number }>('/encomendas/taxa', { method: 'PUT', body: JSON.stringify({ value }) }),
+  createEncomenda: (data: { cpf: string; boat_name?: string | null; description?: string | null; received_at?: string | null }) =>
+    req<Encomenda>('/encomendas', { method: 'POST', body: JSON.stringify(data) }),
+  listEncomendas: (params?: { cpf?: string; status?: EncomendaStatus }) => {
+    const qs = new URLSearchParams();
+    if (params?.cpf) qs.set('cpf', params.cpf);
+    if (params?.status) qs.set('status', params.status);
+    const s = qs.toString();
+    return req<Encomenda[]>(`/encomendas${s ? `?${s}` : ''}`);
+  },
+  entregarEncomenda: (id: string, receivedByName: string) =>
+    req<Encomenda>(`/encomendas/${id}/entregar`, { method: 'PATCH', body: JSON.stringify({ received_by_name: receivedByName }) }),
+  uploadEncomendaPhoto: async (id: string, uri: string, filename: string, type: string) => {
+    const form = new FormData();
+    if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+      const blob = await (await fetch(uri)).blob();
+      form.append('file', blob, filename);
+    } else {
+      form.append('file', { uri, name: filename, type } as any);
+    }
+    const auth = await authHeader();
+    const res = await fetch(`${BASE}/api/encomendas/${id}/photo`, { method: 'POST', body: form, headers: auth });
+    if (!res.ok) {
+      let msg = 'Falha no upload';
+      try { msg = (await res.json()).detail || msg; } catch {}
+      throw new Error(msg);
+    }
+    return res.json() as Promise<Encomenda>;
+  },
   // Painel Financeiro
   financeiroCategorias: () => req<{ pagar: string[]; receber: string[] }>('/financeiro/categorias'),
   createFinanceiro: (data: {
@@ -577,6 +608,24 @@ export type PontoRelatorioFuncionario = { cpf: string; name: string; total_hours
 export type PontoRelatorio = { date_from: string; date_to: string; employees: PontoRelatorioFuncionario[] };
 
 export type EscalaStaffMember = { cpf: string; name: string };
+
+export type EncomendaStatus = 'aguardando' | 'entregue';
+
+export type Encomenda = {
+  id: string;
+  cpf: string;
+  client_name: string;
+  boat_name?: string | null;
+  description?: string | null;
+  received_at: string;
+  fee: number;
+  photo_url?: string | null;
+  status: EncomendaStatus;
+  delivered_at?: string | null;
+  received_by_name?: string | null;
+  created_at: string;
+  updated_at: string;
+};
 
 export type EscalaGerarResult = {
   created: EscalaEntry[];

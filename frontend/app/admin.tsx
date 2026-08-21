@@ -249,6 +249,14 @@ export default function AdminScreen() {
           <Ionicons name="calendar-outline" size={22} color={colors.onBrandPrimary} />
         </Pressable>
         <Pressable
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-encomendas'); }}
+          hitSlop={12}
+          testID="admin-encomendas-button"
+          style={[styles.logoutBtn, { marginLeft: spacing.sm }]}
+        >
+          <Ionicons name="cube-outline" size={22} color={colors.onBrandPrimary} />
+        </Pressable>
+        <Pressable
           onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-financeiro'); }}
           hitSlop={12}
           testID="admin-financeiro-button"

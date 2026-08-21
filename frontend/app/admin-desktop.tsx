@@ -33,6 +33,7 @@ const NAV: NavItem[] = [
   { key: 'servicos', label: 'Serviços', icon: 'construct-outline', route: '/admin-servicos' },
   { key: 'ponto', label: 'Ponto Eletrônico', icon: 'time-outline', route: '/admin-ponto' },
   { key: 'escala', label: 'Escala de Trabalho', icon: 'calendar-outline', route: '/admin-escala' },
+  { key: 'encomendas', label: 'Encomendas', icon: 'cube-outline', route: '/admin-encomendas' },
   { key: 'financeiro', label: 'Painel Financeiro', icon: 'wallet-outline', route: '/admin-financeiro' },
 ];
 
