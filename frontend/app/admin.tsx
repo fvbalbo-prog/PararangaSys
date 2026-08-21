@@ -9,17 +9,13 @@ import {
   RefreshControl,
   ScrollView,
   TextInput,
-  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
-import * as Print from 'expo-print';
-import * as Sharing from 'expo-sharing';
 import { colors, spacing, radius, typography } from '@/src/theme';
-import { formatMoney } from '@/src/format';
 import { api } from '@/src/api';
 import type { MarinaRequest, RequestType } from '@/src/api';
 import { StatusBadge } from '@/src/components/StatusBadge';
@@ -57,7 +53,6 @@ export default function AdminScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState('');
-  const [generating, setGenerating] = useState(false);
   const [orderTotals, setOrderTotals] = useState<Record<string, number>>({});
   const [openEmergencies, setOpenEmergencies] = useState(0);
   const [mensalidadesVencendo, setMensalidadesVencendo] = useState(0);
@@ -183,79 +178,6 @@ export default function AdminScreen() {
     });
 
   const lateCount = quadroRows.filter((r) => r.late).length;
-  const convTotalDay = Object.values(orderTotals).reduce((a, b) => a + b, 0);
-  const brl = formatMoney;
-
-  const generatePdf = async () => {
-    if (quadroRows.length === 0) {
-      Alert.alert('Quadro vazio', 'Não há descidas neste dia para gerar o PDF.');
-      return;
-    }
-    try {
-      setGenerating(true);
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      const rowsHtml = quadroRows
-        .map((r) => {
-          const tideTxt = r.tide != null ? `${r.tide.toFixed(2)} m` : '—';
-          const convTxt = r.conv > 0 ? brl(r.conv) : '—';
-          const rowStyle = r.late ? ' style="background:#FEE2E2;"' : '';
-          const lateTag = r.late ? ' <span style="color:#DC2626;font-weight:700;">(ATRASADA)</span>' : '';
-          return `<tr${rowStyle}>
-            <td class="boat">${r.boat}${lateTag}</td>
-            <td class="c">${r.descida}</td>
-            <td class="c">${r.subida}</td>
-            <td class="c">${tideTxt}</td>
-            <td class="c">${convTxt}</td>
-          </tr>`;
-        })
-        .join('');
-      const lateNote = lateCount > 0
-        ? `<p class="alert">⚠ ${lateCount} ${lateCount === 1 ? 'lancha atrasada' : 'lanchas atrasadas'} (destacadas em vermelho).</p>`
-        : '';
-      const convNote = convTotalDay > 0
-        ? `<p class="conv">🛒 Conveniência do dia: <strong>${brl(convTotalDay)}</strong></p>`
-        : '';
-      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/>
-        <style>
-          * { font-family: -apple-system, Helvetica, Arial, sans-serif; }
-          body { padding: 28px; color: #0B2545; }
-          h1 { font-size: 22px; margin: 0; }
-          h2 { font-size: 15px; font-weight: 500; color: #475569; margin: 4px 0 18px; }
-          .alert { background:#FEE2E2; color:#991B1B; padding:8px 12px; border-radius:6px; font-size:13px; }
-          .conv { background:#ECFDF5; color:#065F46; padding:8px 12px; border-radius:6px; font-size:13px; }
-          table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-          th { background:#0B2545; color:#fff; text-align:left; padding:10px; font-size:13px; }
-          td { padding:10px; border-bottom:1px solid #E2E8F0; font-size:14px; }
-          td.c { text-align:center; }
-          td.boat { font-weight:700; }
-          th.c { text-align:center; }
-          .foot { margin-top:16px; font-size:11px; color:#94A3B8; }
-        </style></head><body>
-        <h1>Marina Pararanga — Quadro do Dia</h1>
-        <h2>${labelForDate(day)}</h2>
-        ${lateNote}
-        ${convNote}
-        <table>
-          <thead><tr>
-            <th>Lancha</th><th class="c">Descida</th><th class="c">Subida</th><th class="c">Maré</th><th class="c">Conveniência</th>
-          </tr></thead>
-          <tbody>${rowsHtml}</tbody>
-        </table>
-        <p class="foot">* horário previsto de retorno (sem solicitação de subida). Gerado em ${new Date().toLocaleString('pt-BR')}.</p>
-        </body></html>`;
-
-      const { uri } = await Print.printToFileAsync({ html });
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Quadro do dia' });
-      } else {
-        await Print.printAsync({ uri });
-      }
-    } catch {
-      Alert.alert('Erro', 'Não foi possível gerar o PDF.');
-    } finally {
-      setGenerating(false);
-    }
-  };
 
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
@@ -277,19 +199,6 @@ export default function AdminScreen() {
           style={[styles.logoutBtn, { marginLeft: spacing.sm }]}
         >
           <Ionicons name="receipt-outline" size={22} color={colors.onBrandPrimary} />
-        </Pressable>
-        <Pressable
-          onPress={generatePdf}
-          hitSlop={12}
-          testID="admin-pdf-button"
-          disabled={generating}
-          style={[styles.logoutBtn, { marginLeft: spacing.sm }]}
-        >
-          {generating ? (
-            <ActivityIndicator size="small" color={colors.onBrandPrimary} />
-          ) : (
-            <Ionicons name="print-outline" size={22} color={colors.onBrandPrimary} />
-          )}
         </Pressable>
         <Pressable
           onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push('/admin-status'); }}

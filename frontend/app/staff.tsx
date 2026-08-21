@@ -34,10 +34,8 @@ export default function StaffScreen() {
   const [items, setItems] = useState<MarinaRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [openEmergencies, setOpenEmergencies] = useState(0);
   const [balcaoCount, setBalcaoCount] = useState(0);
   const [lanchaPending, setLanchaPending] = useState(0);
-  const prevEmgRef = useRef<number | null>(null);
   const prevLanchaRef = useRef<number | null>(null);
   const player = useAudioPlayer(alertSound);
 
@@ -54,16 +52,11 @@ export default function StaffScreen() {
     try {
       const raw = await AsyncStorage.getItem('user');
       if (!raw) return router.replace('/');
-      const [data, emgs, orders] = await Promise.all([
+      const [data, orders] = await Promise.all([
         api.dayRequests(),
-        api.listEmergencies(undefined, 'aberta').catch(() => []),
         api.listOrders().catch(() => [] as ConvenienceOrder[]),
       ]);
       setItems(data);
-      const count = emgs.length;
-      setOpenEmergencies(count);
-      if (prevEmgRef.current !== null && count > prevEmgRef.current) playAlert();
-      prevEmgRef.current = count;
 
       const active = orders.filter(ACTIVE_ORDER);
       setBalcaoCount(active.length);
@@ -128,23 +121,6 @@ export default function StaffScreen() {
           showsVerticalScrollIndicator={false}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={colors.brandPrimary} />}
         >
-          {openEmergencies > 0 ? (
-            <Pressable
-              testID="staff-emergency-banner"
-              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy); router.push('/admin-emergencias'); }}
-              style={({ pressed }) => [styles.emgBanner, pressed && { opacity: 0.9 }]}
-            >
-              <Ionicons name="alert-circle" size={24} color="#FFFFFF" />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.emgTitle}>
-                  {openEmergencies === 1 ? '1 emergência aberta!' : `${openEmergencies} emergências abertas!`}
-                </Text>
-                <Text style={styles.emgSub}>Toque para atender agora</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={20} color="#FFFFFF" />
-            </Pressable>
-          ) : null}
-
           {lanchaPending > 0 ? (
             <Pressable
               testID="staff-balcao-banner"
@@ -202,7 +178,6 @@ const styles = StyleSheet.create({
   logoutBtn: { padding: spacing.sm, borderRadius: radius.pill, backgroundColor: 'rgba(255,255,255,0.08)' },
   sheet: { flex: 1, backgroundColor: colors.surface, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingTop: spacing.lg },
   content: { padding: spacing.lg, paddingBottom: spacing.xxxl, gap: spacing.md },
-  emgBanner: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: colors.error, padding: spacing.lg, borderRadius: radius.md, marginBottom: spacing.xs },
   balcaoBanner: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: '#7C3AED', padding: spacing.lg, borderRadius: radius.md, marginBottom: spacing.xs },
   emgTitle: { color: '#FFFFFF', fontSize: typography.lg, fontWeight: '800' },
   emgSub: { color: '#FFFFFF', opacity: 0.9, fontSize: typography.sm, marginTop: 2 },
